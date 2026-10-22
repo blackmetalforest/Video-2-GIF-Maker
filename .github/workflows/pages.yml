@@ -42,11 +42,9 @@ jobs:
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      # enablement: true turns Pages on via the API using GITHUB_TOKEN, so the
-      # repo does not have to be configured by hand first.
+      # Pages has to be switched on once by hand (see the comment at the top):
+      # the workflow's own token is not allowed to enable it.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
       - name: Upload the site
         uses: actions/upload-pages-artifact@v3
         with:

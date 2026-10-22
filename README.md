@@ -88,9 +88,11 @@ cached ones.
 
 The repository is the site — `index.html` is at the root and there is no
 build step. [.github/workflows/pages.yml](.github/workflows/pages.yml) runs the
-tests and publishes on every push to `main`. In the repository's
-**Settings → Pages**, set **Source** to **GitHub Actions** (the workflow also
-tries to switch it on by itself).
+tests and publishes on every push to `main`. Once, before the first deploy, set
+**Settings → Pages → Build and deployment → Source** to **GitHub Actions** — the
+workflow cannot switch Pages on by itself.
+
+The site is at <https://blackmetalforest.github.io/Video-2-GIF-Maker/>.
 
 ## Testing
 
