@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Video 2 GIF Maker</title>
+<meta name="description" content="Cut a clip out of a video, frame by frame, and save it as a GIF, animated WebP, APNG or a ZIP of frames. Runs entirely in your browser.">
+<!--
+  Checks the browser before the app starts, and says what is wrong if it
+  cannot run. A classic script, first, so it still runs when the app's own
+  modules cannot. See src/preflight.js.
+-->
+<script src="./src/preflight.js"></script>
+<link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+
+<div id="app">
+
+  <!-- Settings. Desktop: left column. Mobile: under the work area. -->
+  <aside id="panel" aria-label="Settings">
+
+    <h1 id="app-title"><span class="wordmark" data-text="Video 2 GIF Maker">Video 2 GIF Maker</span></h1>
+    <!-- The version is written here and nowhere else in the app; package.json
+         and CHANGELOG.md carry the same number, and the tests check all three
+         agree. -->
+    <p id="app-tagline"><span>Videos never leave your computer</span>
+       <span id="app-version">V0.1.0</span></p>
+
+    <section class="group" id="group-video">
+      <h2>Video</h2>
+      <!-- The upper-left file field: clicking it browses, the same as the button. -->
+      <div class="row file-row">
+        <input id="file-name" type="text" readonly placeholder="Click to choose a video…"
+               title="Click to choose a video file">
+        <button id="browse">Browse…</button>
+      </div>
+      <!--
+        Problems with the browser, written by src/preflight.js: red when the
+        app cannot work, orange when a feature is lost.
+      -->
+      <div id="alerts"></div>
+      <p id="video-info" class="muted small">MP4 · WebM · MOV · MKV — H.264, H.265, VP8, VP9, AV1. Other files are converted first.</p>
+      <div id="fallback-row" hidden>
+        <p id="fallback-note" class="small"></p>
+        <div class="row actions">
+          <button id="fallback-go" class="primary">Convert with ffmpeg</button>
+          <button id="fallback-cancel" disabled>Cancel</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="group" id="group-clip">
+      <h2>Clip</h2>
+      <p class="muted small">Scrub the video, then press <strong>⟦ Start</strong> and <strong>End ⟧</strong> under it.</p>
+      <div class="row mark-row"><label>Start</label>
+        <button type="button" class="mark-jump" id="in-jump" disabled title="Go to the start mark">—</button></div>
+      <div class="row mark-row"><label>End</label>
+        <button type="button" class="mark-jump" id="out-jump" disabled title="Go to the end mark">—</button></div>
+      <p id="clip-info" class="muted small">—</p>
+      <div class="row actions">
+        <button id="convert" class="primary" disabled>Convert to Frames</button>
+        <button id="convert-cancel" disabled>Cancel</button>
+      </div>
+      <div class="progress-wrap" id="convert-progress-wrap" hidden><div class="progress" id="convert-progress"></div></div>
+      <p id="convert-info" class="muted small">Takes 3 extra frames either side of the marks, so nothing is lost to a frame’s slip.</p>
+    </section>
+
+    <section class="group" id="group-frames">
+      <div class="group-head"><h2>Frames</h2>
+        <button type="button" class="reset" id="reset-frames" title="Reset Frames to defaults">↺ Reset</button></div>
+      <div class="row"><label for="skip">Frame skip</label>
+        <input type="range" id="skip" min="0" max="15" step="1" value="0"
+               title="Leave out this many frames after each one kept. Each kept frame is held longer, so the GIF still runs at the video's speed.">
+        <output for="skip" id="skip-out">0</output></div>
+      <p id="skip-note" class="muted small">Every frame is kept.</p>
+      <div class="loop-row">
+        <p id="frames-info" class="muted small">—</p>
+        <label class="loop-preview"><input type="checkbox" id="preview-mirror"
+               title="The same as Preview under the GIF: plays it at the output's real timing."> Preview</label>
+      </div>
+      <details class="more" id="frames-more">
+        <summary>Advanced</summary>
+        <div class="row"><label for="speed">GIF speed</label>
+          <input type="range" id="speed" min="25" max="400" step="5" value="100"
+                 title="Play the GIF faster or slower than the video. 100% matches the video.">
+          <output for="speed" id="speed-out">100%</output></div>
+      </details>
+    </section>
+
+    <section class="group" id="group-size">
+      <div class="group-head"><h2>Size &amp; crop</h2>
+        <button type="button" class="reset" id="reset-size" title="Reset Size &amp; crop to defaults">↺ Reset</button></div>
+      <div class="row"><label for="preset">Size</label>
+        <select id="preset" title="The longer side of the GIF, in pixels. The shorter side follows the crop's shape.">
+          <option value="">Custom</option>
+          <option value="0">Original</option>
+          <option value="1080">1080 px</option>
+          <option value="720">720 px</option>
+          <option value="640">640 px</option>
+          <option value="480" selected>480 px</option>
+          <option value="400">400 px</option>
+          <option value="320">320 px</option>
+          <option value="256">256 px</option>
+          <option value="128">128 px</option>
+        </select></div>
+      <div class="row canvas-row"><label for="out-width">Output</label>
+        <span class="canvas-size">
+          <input type="number" id="out-width" min="16" max="4096" step="1" value="480" aria-label="Width">
+          <span class="muted" aria-hidden="true">×</span>
+          <input type="number" id="out-height" min="16" max="4096" step="1" value="270" aria-label="Height">
+        </span>
+        <span class="muted small">px</span></div>
+      <div class="row"><label for="crop-aspect">Crop</label>
+        <select id="crop-aspect" title="The shape of the crop box. Free lets you drag any shape.">
+          <option value="off" selected>Off (whole frame)</option>
+          <option value="free">Free</option>
+          <option value="1">1:1 Square</option>
+          <option value="1.3333333333">4:3</option>
+          <option value="1.7777777778">16:9</option>
+          <option value="0.5625">9:16 Vertical</option>
+          <option value="0.8">4:5</option>
+        </select></div>
+      <div id="crop-rows" hidden>
+        <div class="row"><label for="crop-edit">Edit crop</label>
+          <input type="checkbox" id="crop-edit"
+                 title="Show the whole frame in the GIF view and drag the box to choose what is kept."></div>
+        <p id="crop-info" class="muted small">—</p>
+      </div>
+    </section>
+
+    <section class="group" id="group-colour">
+      <div class="group-head"><h2>Colour &amp; quality</h2>
+        <button type="button" class="reset" id="reset-colour" title="Reset Colour &amp; quality to defaults">↺ Reset</button></div>
+      <div class="row"><label for="colours">GIF colours</label>
+        <input type="range" id="colours" min="2" max="256" step="1" value="256"
+               title="How many colours the GIF's one shared palette holds. Fewer makes a smaller file and a more posterised look.">
+        <output for="colours" id="colours-out">256</output></div>
+      <div class="row"><label for="dither">Dither GIF</label>
+        <input type="checkbox" id="dither" checked
+               title="Use noise to smooth colour transitions. Off gives flatter colour and usually a smaller file."></div>
+      <div class="row"><label for="webp-quality">WebP quality</label>
+        <input type="range" id="webp-quality" min="1" max="100" step="1" value="85"
+               title="Lossy WebP quality. Higher looks better and makes a bigger file.">
+        <output for="webp-quality" id="webp-quality-out">85</output></div>
+      <div class="row"><label for="webp-lossless">Lossless WebP</label>
+        <input type="checkbox" id="webp-lossless"
+               title="Every pixel exactly as decoded, with no compression loss. Files get much bigger."></div>
+      <div class="row"><label for="size-limit">Size limit</label>
+        <select id="size-limit"
+                title="When the saved file would be bigger than this, it is made again at a smaller size until it fits.">
+          <option value="0" selected>None</option>
+          <option value="8">8 MB</option>
+          <option value="10">10 MB (Discord)</option>
+          <option value="25">25 MB</option>
+          <option value="50">50 MB</option>
+        </select></div>
+    </section>
+
+    <section class="group" id="group-text">
+      <h2>Text</h2>
+      <div class="row"><label for="text-mode">Mode</label>
+        <select id="text-mode">
+          <option value="off" selected>Disabled</option>
+          <option value="front">In Front</option>
+          <option value="ontop">On Top</option>
+        </select></div>
+
+      <!-- In Front: three boxes, anchored top, centre and bottom. -->
+      <div id="text-blocks" hidden>
+        <div class="row row-text"><label for="text-top">Top</label>
+          <textarea id="text-top" rows="2" maxlength="5000" placeholder="—"></textarea></div>
+        <div class="row row-text"><label for="text-middle">Center</label>
+          <textarea id="text-middle" rows="2" maxlength="5000" placeholder="—"></textarea></div>
+        <div class="row row-text"><label for="text-bottom">Bottom</label>
+          <textarea id="text-bottom" rows="2" maxlength="5000" placeholder="—"></textarea></div>
+      </div>
+
+      <!-- On Top: one box, in a white band the GIF grows above the picture. -->
+      <div id="text-band" hidden>
+        <div class="row row-text"><label for="text-band-copy">Caption</label>
+          <textarea id="text-band-copy" rows="3" maxlength="5000" placeholder="—"></textarea></div>
+      </div>
+
+      <div id="text-style" hidden>
+        <div class="row"><label for="text-font">Font</label>
+          <select id="text-font">
+            <option value="Anton, Impact, 'Arial Narrow Bold', sans-serif" selected>Anton — like Impact</option>
+            <option value="Oswald, 'Futura Condensed ExtraBold', 'Arial Narrow', sans-serif">Oswald — condensed</option>
+            <option value="'Comic Neue', 'Comic Sans MS', cursive">Comic Neue — like Comic Sans</option>
+            <option value="Arimo, Arial, Helvetica, sans-serif">Arimo — like Arial</option>
+            <option value="Tinos, 'Times New Roman', Times, serif">Tinos — like Times</option>
+          </select></div>
+        <div class="row" id="text-stroke-row"><label for="text-stroke">Stroke weight</label>
+          <input type="range" id="text-stroke" min="0" max="20" step="0.1" value="5">
+          <output for="text-stroke" id="text-stroke-out">5.0</output></div>
+        <div class="row"><label for="text-size">Size</label>
+          <input type="range" id="text-size" min="30" max="300" step="1" value="100">
+          <output for="text-size" id="text-size-out">100%</output></div>
+      </div>
+    </section>
+
+    <section class="group" id="group-output">
+      <h2>Output</h2>
+      <p id="output-info" class="muted small">Convert to Frames first.</p>
+      <div class="save-grid">
+        <button class="save" data-format="gif" disabled>Save GIF</button>
+        <button class="save" data-format="webp" disabled>Save WebP</button>
+        <button class="save" data-format="apng" disabled>Save APNG</button>
+        <button class="save" data-format="zip" disabled>Save frames (ZIP)</button>
+      </div>
+      <div class="row actions save-cancel-row" hidden>
+        <span class="muted small" id="save-status"></span>
+        <button id="save-cancel">Cancel</button>
+      </div>
+      <div class="progress-wrap" id="save-progress-wrap" hidden><div class="progress" id="save-progress"></div></div>
+      <p id="save-info" class="muted small"></p>
+    </section>
+
+    <footer class="muted small">
+      Everything runs in your browser — videos are never uploaded.
+      <button id="shortcuts" type="button" class="link">Keyboard shortcuts</button>
+      <button id="browser-check" type="button" class="link">Browser check</button>
+    </footer>
+  </aside>
+
+  <!-- The work area: the video on top, the GIF under it, the frames at the bottom. -->
+  <main id="work">
+
+    <section id="player" aria-label="Video player">
+      <div class="stage" id="video-stage">
+        <video id="video" playsinline preload="auto" hidden></video>
+        <div class="dropzone" id="dropzone">
+          <div class="drop-inner">
+            <strong>Drop a video here</strong>
+            <span class="muted">MP4 · WebM · MOV · MKV</span>
+            <span class="muted small">H.264 · H.265 · VP8 · VP9 · AV1 — and AVI, WMV and more through ffmpeg</span>
+            <button id="browse-empty" class="primary">Choose a video…</button>
+          </div>
+        </div>
+        <div class="busy" id="busy" hidden><div class="spinner"></div><span id="busy-text">Working…</span></div>
+      </div>
+      <div class="transport" id="transport">
+        <!--
+          The scrub bar. A plain div rather than a range input, because it
+          has to show the marked clip and the two marks under the thumb.
+        -->
+        <div id="scrub" class="scrub" role="slider" tabindex="0" aria-label="Position in the video"
+             aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+          <div class="scrub-track"></div>
+          <div class="scrub-clip" id="scrub-clip" hidden></div>
+          <div class="scrub-mark in" id="scrub-in" hidden></div>
+          <div class="scrub-mark out" id="scrub-out" hidden></div>
+          <div class="scrub-head" id="scrub-head"></div>
+        </div>
+        <div class="transport-row">
+          <div class="transport-buttons">
+            <button type="button" class="icon" id="jump-in" disabled title="Go to the start mark (Home)">⏮</button>
+            <button type="button" class="icon" id="step-back" disabled title="Back one frame (←). Shift: one second.">◀︎❙</button>
+            <button type="button" class="icon play" id="play" disabled title="Play / pause (Space)">▶︎</button>
+            <button type="button" class="icon" id="step-fwd" disabled title="Forward one frame (→). Shift: one second.">❙▶︎</button>
+            <button type="button" class="icon" id="jump-out" disabled title="Go to the end mark (End)">⏭</button>
+          </div>
+          <div class="timecode-box">
+            <output id="timecode" title="Hours : minutes : seconds : frame within the second">00:00:00:00</output>
+            <span id="frame-number" class="muted small"></span>
+          </div>
+          <div class="transport-buttons">
+            <button type="button" id="mark-in" disabled title="Mark this frame as the start of the GIF (I)">⟦ Start</button>
+            <button type="button" id="mark-out" disabled title="Mark this frame as the end of the GIF (O)">End ⟧</button>
+          </div>
+          <div class="transport-extra">
+            <select id="rate" title="Playback speed of the video (not the GIF)" disabled>
+              <option value="0.25">0.25×</option>
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1×</option>
+              <option value="2">2×</option>
+            </select>
+            <button type="button" class="icon" id="mute" disabled title="Sound on / off (M)">🔊</button>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="gif-view" aria-label="GIF preview">
+      <div class="stage checker" id="gif-stage">
+        <canvas id="gif-canvas" hidden></canvas>
+        <div class="crop-layer" id="crop-layer" hidden>
+          <div class="crop-box" id="crop-box">
+            <span class="crop-handle" data-h="nw"></span><span class="crop-handle" data-h="n"></span>
+            <span class="crop-handle" data-h="ne"></span><span class="crop-handle" data-h="e"></span>
+            <span class="crop-handle" data-h="se"></span><span class="crop-handle" data-h="s"></span>
+            <span class="crop-handle" data-h="sw"></span><span class="crop-handle" data-h="w"></span>
+          </div>
+        </div>
+        <p class="placeholder muted" id="gif-placeholder">The GIF appears here after <strong>Convert to Frames</strong>.</p>
+      </div>
+      <div class="view-foot">
+        <div class="view-toggles">
+          <label><input type="checkbox" id="preview" disabled
+                 title="Plays the GIF frame by frame at its real timing, including GIF's 10 ms grid. Preview only."> Preview</label>
+          <output id="preview-fps"></output>
+          <label><input type="checkbox" id="show-border"
+                 title="Outlines the exact edge of the GIF. Preview only."> Image border</label>
+        </div>
+        <span id="view-size" class="muted"></span>
+      </div>
+    </section>
+
+    <section id="filmstrip" aria-label="Frames">
+      <div class="strip-head">
+        <button type="button" id="strip-set-start" disabled title="Make the selected frame the GIF's first frame (S)">Set start</button>
+        <button type="button" id="strip-set-end" disabled title="Make the selected frame the GIF's last frame (E)">Set end</button>
+        <span id="strip-info" class="muted small">No frames yet.</span>
+        <span class="strip-legend muted small">
+          <span class="key k-start"></span>start <span class="key k-end"></span>end
+          <span class="key k-skip"></span>skipped <span class="key k-out"></span>not in GIF
+        </span>
+      </div>
+      <div id="strip" class="strip" tabindex="0" aria-label="Frame timeline. Arrow keys move, S and E set start and end."></div>
+    </section>
+  </main>
+</div>
+
+<input id="file-input" type="file" hidden
+       accept="video/*,.mp4,.m4v,.mov,.webm,.mkv,.avi,.wmv,.flv,.ogv,.3gp,.ts,.mts,.m2ts,.mpg,.mpeg">
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>

@@ -1,0 +1,29 @@
+Copyright (C) 2026 blackmetalforest
+
+Permission to use, copy, modify, and/or distribute this software for any
+purpose with or without fee is hereby granted.
+
+THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH
+REGARD TO THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
+AND FITNESS. IN NO EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT,
+INDIRECT, OR CONSEQUENTIAL DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM
+LOSS OF USE, DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR
+OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
+PERFORMANCE OF THIS SOFTWARE.
+
+
+---
+
+This is the BSD Zero Clause License (0BSD), an OSI-approved licence that
+grants everything and asks for nothing — no attribution, no notice, no
+conditions of any kind. Use it, change it, sell it, ship it without saying
+where it came from.
+
+It applies to everything outside vendor/. "Software" above is meant in the
+widest sense and covers the whole of this project's own work, artwork and
+audio included: the source code, the page, the wordmark images and the theme
+tune in content/ are all released on these terms.
+
+It does NOT apply to vendor/, which holds third-party code and fonts under
+their own terms. Those licences are permissive too, but unlike this one they
+require their notices be kept. See THIRD-PARTY.md.

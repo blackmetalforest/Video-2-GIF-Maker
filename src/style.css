@@ -1,0 +1,776 @@
+/*
+ * Layout: settings in a left column; the work area fills the rest, split top
+ * to bottom into the video player, the GIF preview and the frame timeline.
+ * On a phone it all stacks: work area first, settings under it.
+ *
+ * The look is the Console theme of the Funee Spinning GIF Maker — grey
+ * plastic, buttons that press down, a colour per settings section.
+ */
+
+/*
+ * Caption fonts, bundled so the default looks the same everywhere: open
+ * lookalikes of Impact, Arial and the rest, all SIL OFL 1.1, with their
+ * licences beside them in vendor/fonts/. Self-hosted, so the page makes no
+ * requests to anyone else.
+ *
+ * font-display: block, because these are measured. A swapped-in fallback
+ * would not merely look wrong for an instant, it would be measured, sized and
+ * wrapped as though it were the real thing.
+ */
+
+@font-face {
+  font-family: 'Anton';
+  font-style: normal;
+  font-weight: normal;
+  font-display: block;
+  src: url('../vendor/fonts/anton-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Oswald';
+  font-style: normal;
+  font-weight: normal;
+  font-display: block;
+  src: url('../vendor/fonts/oswald-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Comic Neue';
+  font-style: normal;
+  font-weight: normal;
+  font-display: block;
+  src: url('../vendor/fonts/comic-neue-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Arimo';
+  font-style: normal;
+  font-weight: normal;
+  font-display: block;
+  src: url('../vendor/fonts/arimo-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Tinos';
+  font-style: normal;
+  font-weight: normal;
+  font-display: block;
+  src: url('../vendor/fonts/tinos-latin.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+:root {
+  --bg: #232326;
+  --panel: #323236;
+  --panel-2: #3d3d42;
+  --line: #55555c;
+  --text: #f4f4f4;
+  --muted: #c4c4cb;
+  --accent: #8a4fe0;
+  --on-accent: #fff;        /* text drawn on the accent colour */
+  --field: #28282c;         /* text boxes, dropdowns, the progress track */
+  --shadow: #1c1c1f;        /* the edge under a raised button */
+  --danger: #e03131;
+  --caution: #e8912d;
+  --radius: 12px;
+  --panel-width: 400px;
+  --start: #2fae4a;         /* the GIF's first frame, everywhere it is marked */
+  --end: #e8392f;           /* and its last */
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.45 Arimo, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overscroll-behavior: none;
+}
+
+#app {
+  display: grid;
+  grid-template-columns: var(--panel-width) minmax(0, 1fr);
+  grid-template-areas: "panel work";
+  height: 100%;
+}
+#app.dragover #work {
+  outline: 2px dashed var(--accent);
+  outline-offset: -6px;
+}
+
+/* ---------------------------------------------------------- work area */
+
+#work {
+  grid-area: work;
+  display: grid;
+  /* The video and the GIF share the height; the strip takes what it needs. */
+  grid-template-rows: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  min-width: 0;
+  min-height: 0;
+  padding: 12px;
+}
+
+#player, #gif-view {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+
+.stage {
+  position: relative;
+  flex: 1;
+  min-height: 120px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: #111113;
+}
+.stage.checker {
+  background:
+    linear-gradient(45deg, #2a2a2e 25%, transparent 25%, transparent 75%, #2a2a2e 75%),
+    linear-gradient(45deg, #2a2a2e 25%, #303035 25%, #303035 75%, #2a2a2e 75%);
+  background-size: 24px 24px;
+  background-position: 0 0, 12px 12px;
+}
+
+/* Both pictures fit their stage whole, never cropped by it. */
+#video, #gif-canvas {
+  display: block;
+  max-width: 100%;
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  grid-area: 1 / 1;
+}
+#video { width: 100%; height: 100%; object-fit: contain; }
+#video[hidden], #gif-canvas[hidden] { display: none; }
+#gif-canvas.show-border { box-shadow: 0 0 0 1px #000, 0 0 0 2px rgba(255, 255, 255, 0.5); }
+/* Pixel art and tiny GIFs blown up in the view should stay crisp. */
+#gif-canvas.pixelated { image-rendering: pixelated; }
+
+.placeholder { margin: 0; padding: 16px; text-align: center; grid-area: 1 / 1; }
+.placeholder[hidden] { display: none; }
+
+.dropzone {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  text-align: center;
+  padding: 16px;
+}
+.dropzone[hidden] { display: none; }
+.drop-inner { display: grid; gap: 8px; justify-items: center; }
+.drop-inner strong { font-size: 16px; }
+
+.busy[hidden] { display: none; }
+.busy {
+  position: absolute;
+  inset: auto 12px 12px auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(0, 0, 0, 0.72);
+  padding: 8px 12px;
+  border-radius: var(--radius);
+  z-index: 5;
+}
+.spinner {
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ----------------------------------------------------------- transport */
+
+.transport { display: grid; gap: 6px; }
+
+/*
+ * The scrub bar: a track, the marked clip over it in the start/end colours,
+ * a tick for each mark, and the playhead. Tall enough to grab easily; the
+ * track itself is drawn thin inside it.
+ */
+.scrub {
+  position: relative;
+  height: 22px;
+  cursor: pointer;
+  touch-action: none;
+  border-radius: 6px;
+  outline-offset: 2px;
+}
+.scrub-track, .scrub-clip {
+  position: absolute;
+  top: 8px;
+  height: 6px;
+  border-radius: 3px;
+}
+.scrub-track { left: 0; right: 0; background: var(--field); box-shadow: inset 0 0 0 1px var(--line); }
+.scrub-clip {
+  background: linear-gradient(90deg, var(--start), var(--end));
+  opacity: 0.85;
+}
+.scrub-clip[hidden], .scrub-mark[hidden] { display: none; }
+.scrub-mark {
+  position: absolute;
+  top: 2px;
+  width: 3px;
+  height: 18px;
+  margin-left: -1.5px;
+  border-radius: 2px;
+}
+.scrub-mark.in { background: var(--start); }
+.scrub-mark.out { background: var(--end); }
+.scrub-head {
+  position: absolute;
+  top: 3px;
+  left: 0;
+  width: 16px;
+  height: 16px;
+  margin-left: -8px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 0 2px var(--shadow);
+  pointer-events: none;
+}
+.scrub:focus-visible { outline: 2px solid var(--accent); }
+
+.transport-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+}
+.transport-buttons, .transport-extra { display: flex; align-items: center; gap: 6px; }
+.transport button { min-height: 32px; padding: 4px 10px; }
+.transport button.icon { min-width: 40px; font-size: 15px; line-height: 1; }
+.transport button.play { min-width: 52px; }
+#mark-in { background: var(--start); color: #10240f; }
+#mark-out { background: var(--end); color: #fff; }
+#rate { width: auto; padding: 4px 6px; }
+
+/*
+ * The timecode: big, fixed-width digits, so it can be read at a glance and
+ * does not jitter as it counts.
+ */
+.timecode-box { display: flex; align-items: baseline; gap: 10px; }
+#timecode {
+  font: 22px/1 'Oswald', Impact, sans-serif;
+  letter-spacing: 0.06em;
+  font-variant-numeric: tabular-nums;
+  background: #111113;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 5px 10px 4px;
+  color: #fff;
+}
+#frame-number { font-variant-numeric: tabular-nums; min-width: 9ch; }
+
+/* ---------------------------------------------------------- GIF view */
+
+.view-foot {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+}
+.view-toggles { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.view-foot label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.view-foot input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
+#preview-fps, #view-size { color: var(--muted); font-variant-numeric: tabular-nums; }
+#preview-fps:empty { display: none; }
+
+/*
+ * The crop box. The layer is laid exactly over the displayed frame by
+ * src/crop.js; the huge shadow around the box shades everything outside it.
+ */
+.crop-layer { position: absolute; z-index: 3; }
+.crop-layer[hidden] { display: none; }
+.crop-box {
+  position: absolute;
+  box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.55);
+  outline: 2px solid #fff;
+  cursor: move;
+  touch-action: none;
+}
+/* Thirds, to help place a subject. */
+.crop-box::before, .crop-box::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  border: 0 dashed rgba(255, 255, 255, 0.35);
+}
+.crop-box::before { left: 33.333%; right: 33.333%; border-left-width: 1px; border-right-width: 1px; }
+.crop-box::after { top: 33.333%; bottom: 33.333%; border-top-width: 1px; border-bottom-width: 1px; }
+.crop-handle {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  margin: -7px 0 0 -7px;
+  background: #fff;
+  border: 2px solid #111;
+  border-radius: 3px;
+  z-index: 1;
+}
+.crop-handle[data-h="nw"] { left: 0; top: 0; cursor: nwse-resize; }
+.crop-handle[data-h="n"] { left: 50%; top: 0; cursor: ns-resize; }
+.crop-handle[data-h="ne"] { left: 100%; top: 0; cursor: nesw-resize; }
+.crop-handle[data-h="e"] { left: 100%; top: 50%; cursor: ew-resize; }
+.crop-handle[data-h="se"] { left: 100%; top: 100%; cursor: nwse-resize; }
+.crop-handle[data-h="s"] { left: 50%; top: 100%; cursor: ns-resize; }
+.crop-handle[data-h="sw"] { left: 0; top: 100%; cursor: nesw-resize; }
+.crop-handle[data-h="w"] { left: 0; top: 50%; cursor: ew-resize; }
+@media (pointer: coarse) { .crop-handle { width: 22px; height: 22px; margin: -11px 0 0 -11px; } }
+
+/* ----------------------------------------------------------- filmstrip */
+
+#filmstrip { display: grid; gap: 6px; min-width: 0; }
+.strip-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.strip-head button { min-height: 30px; padding: 4px 12px; }
+#strip-set-start { background: var(--start); color: #10240f; }
+#strip-set-end { background: var(--end); color: #fff; }
+#strip-info { font-variant-numeric: tabular-nums; }
+.strip-legend { margin-left: auto; display: flex; align-items: center; gap: 4px 6px; flex-wrap: wrap; }
+.strip-legend .key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-left: 6px; }
+.k-start { background: var(--start); }
+.k-end { background: var(--end); }
+.k-skip { background: repeating-linear-gradient(45deg, #777 0 2px, #333 2px 4px); }
+.k-out { background: #444; opacity: 0.6; }
+
+.strip {
+  position: relative;       /* the thumbnails' offsetParent, for centring */
+  display: flex;
+  gap: 4px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 6px 4px 10px;
+  min-height: 106px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  scrollbar-color: var(--line) var(--panel);
+  outline-offset: -2px;
+}
+.strip:focus-visible { outline: 2px solid var(--accent); }
+
+.thumb {
+  position: relative;
+  flex: none;
+  display: grid;
+  gap: 2px;
+  padding: 3px;
+  min-height: 0;
+  border-radius: 6px;
+  background: #1c1c1f;
+  box-shadow: none;
+  border: 2px solid transparent;
+  font-weight: 400;
+  cursor: pointer;
+}
+.thumb:active:not(:disabled) { transform: none; box-shadow: none; }
+.thumb canvas { display: block; border-radius: 3px; background: #000; }
+.thumb .num {
+  font-size: 11px;
+  line-height: 1.2;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.thumb .flag {
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  font: 10px/1 'Oswald', Impact, sans-serif;
+  letter-spacing: 0.06em;
+  padding: 2px 4px;
+  border-radius: 3px;
+}
+.thumb .flag:empty { display: none; }
+.thumb.pending canvas { opacity: 0.3; }
+.thumb.outside canvas { opacity: 0.28; filter: grayscale(1); }
+.thumb.outside .num { opacity: 0.5; }
+/* Skipped frames: still part of the clip's time, but not shown. */
+.thumb.skipped canvas { opacity: 0.4; filter: grayscale(1); }
+.thumb.skipped::after {
+  content: "";
+  position: absolute;
+  inset: 3px 3px 18px;
+  border-radius: 3px;
+  background: repeating-linear-gradient(45deg, rgba(0,0,0,0.35) 0 4px, transparent 4px 8px);
+  pointer-events: none;
+}
+/* The extra frames either side of the video's marks: a dashed rim. */
+.thumb.pad { border-style: dashed; border-color: #5d5d66; }
+.thumb.start { border: 2px solid var(--start); }
+.thumb.end { border: 2px solid var(--end); }
+.thumb.start .flag { background: var(--start); color: #10240f; }
+.thumb.end .flag { background: var(--end); color: #fff; }
+.thumb.start.end .flag { background: linear-gradient(90deg, var(--start), var(--end)); }
+.thumb.selected { background: #fff; }
+.thumb.selected .num { color: #111; font-weight: 700; }
+.thumb:hover:not(.selected) { background: #2c2c31; filter: none; }
+
+/* --------------------------------------------------------------- panel */
+
+#panel {
+  grid-area: panel;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  scrollbar-color: var(--line) var(--panel);
+}
+
+/*
+ * The wordmark, in the spinning GIF maker's style: a light-to-purple fill
+ * over a heavy black outline and a drop shadow. The outline is a second copy
+ * of the text behind the first (the ::before), because a stroke drawn on the
+ * text itself is centred on the outline and eats half into the letters.
+ */
+#app-title { margin: 4px 4px 0; font-weight: 400; line-height: 1; }
+.wordmark {
+  position: relative;
+  display: inline-block;
+  font: 40px/1.1 'Anton', Impact, sans-serif;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  background: linear-gradient(180deg, #ffffff 0%, #ffffff 30%, #d6b8ff 55%, #8a4fe0 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.wordmark::before {
+  content: attr(data-text);
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  color: #000;
+  -webkit-text-stroke: 9px #000;
+  text-shadow: 3px 5px 0 #8b8b93;
+  background: none;
+}
+#app-title { position: relative; z-index: 0; }
+
+#app-tagline {
+  margin: -6px 4px 0;
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+}
+
+.group {
+  background: var(--panel-2);
+  border: 2px solid #232326;
+  box-shadow: inset 0 2px 0 #ffffff12;
+  border-radius: var(--radius);
+  padding: 12px;
+}
+.group[data-disabled="true"] > :not(h2):not(.group-head) { opacity: 0.55; }
+.group h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 12px;
+  font-family: 'Oswald', Impact, sans-serif;
+  font-weight: 400;
+  font-size: 17px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text);
+}
+.group h2::before {
+  content: "";
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: inset 0 -2px 0 #0004;
+}
+.group-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 12px;
+}
+.group-head h2 { margin: 0; }
+.group p { margin: 0 0 8px; }
+.group p:last-child { margin-bottom: 0; }
+
+/*
+ * A colour per section, top to bottom through the rainbow, as in the Console
+ * theme. A section's colour is its --accent, so its title dot, sliders,
+ * checkboxes and main button all share it.
+ */
+#group-video  { --accent: #e8392f; --on-accent: #fff; }
+#group-clip   { --accent: #f07a1a; --on-accent: #232326; }
+#group-frames { --accent: #f2b705; --on-accent: #232326; }
+#group-size   { --accent: #2fae4a; --on-accent: #232326; }
+#group-colour { --accent: #17a6a6; --on-accent: #232326; }
+#group-text   { --accent: #2f6fe0; --on-accent: #fff; }
+#group-output { --accent: #8a4fe0; --on-accent: #fff; }
+
+.row {
+  display: grid;
+  grid-template-columns: 104px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.row:last-child { margin-bottom: 0; }
+.row label { color: var(--muted); font-size: 13px; }
+.row.actions { grid-template-columns: 1fr auto; }
+.row.file-row { grid-template-columns: 1fr auto; }
+#file-name { cursor: pointer; }
+#file-name:hover { border-color: var(--accent); }
+.row.mark-row { grid-template-columns: 104px 1fr; }
+.mark-jump {
+  justify-self: start;
+  font: 16px/1 'Oswald', Impact, sans-serif;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+  padding: 6px 12px 5px;
+  min-height: 0;
+}
+.canvas-row { grid-template-columns: 104px auto 1fr; }
+.canvas-size { display: flex; align-items: center; gap: 6px; min-width: 0; }
+.canvas-size input[type="number"] { width: 72px; }
+.row output { font-variant-numeric: tabular-nums; min-width: 52px; text-align: right; cursor: text; }
+
+.row input.number-edit {
+  width: 72px;
+  min-width: 0;
+  padding: 3px 5px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  appearance: textfield;
+  -moz-appearance: textfield;
+}
+.row input.number-edit::-webkit-outer-spin-button,
+.row input.number-edit::-webkit-inner-spin-button { appearance: none; margin: 0; }
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+  touch-action: pan-y;
+}
+input[type="number"], input[type="text"], textarea, select {
+  width: 100%;
+  background: var(--field);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  padding: 6px 8px;
+  font: inherit;
+}
+input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); justify-self: start; margin: 0; }
+input[readonly] { color: var(--muted); }
+
+/* Buttons stand proud of the panel on a dark edge, and press down into it. */
+button {
+  background: #4a4a50;
+  color: var(--text);
+  border: none;
+  border-radius: 9px;
+  box-shadow: 0 3px 0 var(--shadow);
+  padding: 8px 12px;
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  min-height: 36px;
+}
+button:hover:not(:disabled) { filter: brightness(1.12); }
+button:active:not(:disabled) { transform: translateY(2px); box-shadow: 0 1px 0 var(--shadow); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button.primary {
+  background: var(--accent);
+  color: var(--on-accent);
+  box-shadow: 0 3px 0 color-mix(in srgb, var(--accent) 55%, black);
+}
+button.reset {
+  min-height: 0;
+  padding: 3px 10px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+}
+button.reset:hover:not(:disabled) { border-color: var(--accent); color: var(--text); filter: none; }
+button.reset:active:not(:disabled) { transform: none; box-shadow: none; }
+@media (pointer: coarse) { button.reset { padding: 7px 14px; } }
+button.link {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  min-height: 0;
+  margin-left: 4px;
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+button.link:active:not(:disabled) { transform: none; }
+
+.save-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+.save-cancel-row { margin-top: 8px; }
+.save-cancel-row[hidden] { display: none; }
+
+.progress-wrap {
+  height: 6px;
+  background: var(--field);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 8px 0;
+}
+.progress-wrap[hidden] { display: none; }
+.progress { height: 100%; width: 0; background: var(--accent); transition: width 0.1s linear; }
+
+.muted { color: var(--muted); }
+.small { font-size: 12px; }
+.warn { color: var(--danger); font-weight: 600; }
+.caution { color: var(--caution); font-weight: 600; }
+footer { padding: 0 4px 8px; }
+
+#alerts { margin: 0 0 8px; }
+#alerts:empty { display: none; }
+#alerts a { color: var(--accent); white-space: nowrap; }
+#fallback-row[hidden] { display: none; }
+#fallback-row { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--line); }
+
+.loop-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.loop-row #frames-info { flex: 1; min-width: 0; margin: 0; }
+.loop-preview {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.loop-preview input[type="checkbox"] { width: 16px; height: 16px; }
+
+details.more {
+  border-top: 1px solid var(--line);
+  margin-top: 10px;
+  padding-top: 8px;
+}
+details.more > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 0;
+}
+details.more > summary:hover { color: var(--text); }
+details.more[open] > summary { margin-bottom: 8px; }
+
+#crop-rows[hidden], #text-blocks[hidden], #text-band[hidden], #text-style[hidden],
+#text-stroke-row[hidden] { display: none; }
+
+.row-text { align-items: start; }
+.row-text label { padding-top: 6px; }
+#text-blocks textarea, #text-band textarea {
+  resize: vertical;
+  min-height: calc(2em + 12px);
+  font-family: inherit;
+  line-height: 1.35;
+}
+#text-band textarea { min-height: calc(3em + 12px); }
+
+/* The keyboard shortcut sheet, opened from the footer. */
+.sheet {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: grid;
+  place-items: center;
+  background: rgba(12, 13, 16, 0.8);
+  padding: 16px;
+}
+.sheet[hidden] { display: none; }
+.sheet-card {
+  background: var(--panel-2);
+  border: 2px solid #232326;
+  border-radius: var(--radius);
+  padding: 18px 20px;
+  max-width: 520px;
+  width: 100%;
+  max-height: 90vh;
+  overflow: auto;
+}
+.sheet-card h2 { margin: 0 0 12px; font: 400 18px 'Oswald', Impact, sans-serif; letter-spacing: 0.06em; text-transform: uppercase; }
+.sheet-card h3 { margin: 14px 0 6px; font-size: 13px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+.sheet-card dl { display: grid; grid-template-columns: auto 1fr; gap: 4px 14px; margin: 0; }
+.sheet-card dt { font-variant-numeric: tabular-nums; }
+.sheet-card dd { margin: 0; color: var(--muted); }
+kbd {
+  display: inline-block;
+  min-width: 1.6em;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: #4a4a50;
+  box-shadow: 0 2px 0 var(--shadow);
+  font: 600 12px/1.5 Arimo, sans-serif;
+  text-align: center;
+}
+
+/* ---------------------------------------------- narrow screens and phones
+ * One column: the work area first, the settings under it, and the page
+ * scrolls as a whole. Each stage gets a fixed share of the screen's height.
+ */
+@media (max-width: 900px) {
+  #app {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "work" "panel";
+    height: auto;
+    min-height: 100%;
+  }
+  #work {
+    grid-template-rows: auto auto auto;
+    padding: 8px;
+  }
+  #video-stage { height: 38vh; flex: none; }
+  #gif-stage { height: 34vh; flex: none; }
+  #panel { overflow: visible; border-right: none; border-top: 1px solid var(--line); }
+  .wordmark { font-size: 34px; }
+  .strip-legend { display: none; }
+  #timecode { font-size: 19px; }
+}

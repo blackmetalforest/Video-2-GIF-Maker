@@ -1,0 +1,6 @@
+# Local test videos — generated with ffmpeg, see "Testing" in the README
+test-videos/
+
+# Editor / OS noise
+.DS_Store
+*.swp

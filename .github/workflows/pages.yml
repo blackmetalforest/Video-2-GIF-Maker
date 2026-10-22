@@ -1,0 +1,55 @@
+# Publish the site to GitHub Pages.
+#
+# The whole repository is the site — index.html sits at the root — so the
+# upload path is simply ".".
+#
+# Before this runs, enable Pages for the repo: Settings -> Pages -> Source ->
+# "GitHub Actions".
+
+name: Deploy web app
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Let a running deploy finish rather than cancelling it mid-publish.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Unit tests (timing, timecodes, encoders)
+        run: node tests/run.mjs
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      # enablement: true turns Pages on via the API using GITHUB_TOKEN, so the
+      # repo does not have to be configured by hand first.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+      - name: Upload the site
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: .
+      - id: deployment
+        uses: actions/deploy-pages@v4
