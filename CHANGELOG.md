@@ -17,6 +17,13 @@ The first version.
 - Convert to Frames decodes the marked clip plus three frames either side
   into a filmstrip, where the GIF's first and last frames are chosen.
 - Frame skip that keeps the GIF at the video's speed, and a GIF speed control.
-- Size presets, a drag-to-crop box with fixed shapes, captions (In Front and
-  On Top), GIF colours and dithering, WebP quality, and a file size limit.
-- Saves GIF, animated WebP, APNG, or a ZIP of PNG frames with their timing.
+- Frames are converted at a chosen frame size (the video's own by default),
+  with a memory estimate and a dialog suggesting smaller sizes when it is too
+  much. No limit on the number of frames.
+- `?src=` opens a video by address, read in pieces, for testing long videos.
+- A GIF size that shrinks the output, a drag-to-crop box with fixed shapes, captions (In Front and
+  On Top), GIF colors and dithering, WebP quality, and a file size limit.
+- Long videos: frames stored as compressed WebP stills and decoded on demand,
+  a Convert skip and a Quality choice, straight-through decoding, a virtual
+  timeline, and streamed saving — tested on a two-hour 1080p video.
+- Saves GIF, animated WebP, or a ZIP of PNG frames with their timing.

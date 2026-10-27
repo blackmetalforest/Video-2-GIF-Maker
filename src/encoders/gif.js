@@ -12,10 +12,21 @@
  * Unlike the spinning GIF maker, frames are never all held at once: a 10 s
  * clip at 720p is 300 frames of 3.7 MB each, more than a browser tab is
  * given. The palette is built from a handful of frames, then every frame is
- * rendered, quantised, written and dropped in turn.
+ * rendered, quantised, written and dropped in turn — and the file itself
+ * leaves in pieces as it grows (PIECE_BYTES).
  */
 
 import { GIFEncoder, quantize, applyPalette } from '../../vendor/gifenc.esm.js';
+import { maybeYield } from '../yield.js';
+
+/*
+ * The file is handed to a Blob in pieces of about this size as it is written,
+ * and the encoder's buffer emptied. Kept in one buffer, a long GIF needed its
+ * whole size twice over at the end (the buffer, then its copy) — hundreds of
+ * megabytes for a long clip — and the browser's blob store, unlike a buffer,
+ * can move what it holds to disk.
+ */
+const PIECE_BYTES = 8 * 1024 * 1024;
 
 // How many frames to sample when building the shared palette.
 const PALETTE_SAMPLES = 16;
@@ -142,10 +153,12 @@ function applyPaletteDithered(rgba, palette, width, height) {
  * @param {boolean} [opts.dither=true]
  * @param {(done:number, total:number) => void} [opts.onProgress]
  * @param {() => boolean} [opts.cancelled]
+ * @param {number} [opts.pieceBytes]    how big a piece leaves the encoder at
  * @returns {Promise<Blob>}
  */
 export async function encodeGif({ count, render, delays, colours = 256, dither = true,
-                                  onProgress = null, cancelled = () => false }) {
+                                  onProgress = null, cancelled = () => false,
+                                  pieceBytes = PIECE_BYTES }) {
   if (!count) throw new Error('No frames to encode');
   const size = Math.max(2, Math.min(256, Math.round(colours)));
 
@@ -163,7 +176,8 @@ export async function encodeGif({ count, render, delays, colours = 256, dither =
   const palette = quantize(merged, size, { format: 'rgb565' });
 
   // Pass two: every frame, in order.
-  const gif = GIFEncoder();
+  const gif = GIFEncoder({ initialCapacity: Math.max(4096, pieceBytes * 2) });
+  const pieces = [];
   let i = 0;
   const all = Array.from({ length: count }, (_, k) => k);
   for await (const frame of render(all)) {
@@ -180,10 +194,14 @@ export async function encodeGif({ count, render, delays, colours = 256, dither =
       first: i === 0,
     });
     i++;
+    if (gif.stream.bytesView().length >= pieceBytes) {
+      pieces.push(new Blob([gif.stream.bytesView()]));
+      gif.stream.reset();
+    }
     if (onProgress) onProgress(i, count);
-    // Let the page breathe: a big frame takes long enough to freeze it.
-    await new Promise((r) => setTimeout(r, 0));
+    await maybeYield();
   }
   gif.finish();
-  return new Blob([gif.bytes()], { type: 'image/gif' });
+  pieces.push(new Blob([gif.stream.bytesView()]));
+  return new Blob(pieces, { type: 'image/gif' });
 }

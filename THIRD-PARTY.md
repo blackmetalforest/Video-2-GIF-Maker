@@ -55,7 +55,7 @@ licence texts in [vendor/fonts](vendor/fonts):
 
 ## Shared with the Funee Spinning GIF Maker
 
-The GIF, WebP, APNG and PNG encoders, the caption layout
+The GIF, WebP and PNG encoders, the caption layout
 (`src/overlay-text.js`), the browser check (`src/preflight.js`) and the look
 come from the same author's
 [Funee Spinning GIF Maker](https://github.com/blackmetalforest/Funee-Spinning-GIF),

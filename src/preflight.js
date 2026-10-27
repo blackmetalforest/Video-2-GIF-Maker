@@ -79,7 +79,7 @@
     W4: {
       title: 'Saving WebP is unavailable.',
       why: 'This browser cannot make WebP images.',
-      tryText: 'GIF, APNG and ZIP work normally.',
+      tryText: 'GIF and ZIP work normally.',
       note: true,
     },
     W5: {

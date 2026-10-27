@@ -15,7 +15,7 @@
  */
 
 import {
-  Input, BlobSource, ALL_FORMATS, EncodedPacketSink, VideoSampleSink,
+  Input, BlobSource, UrlSource, ALL_FORMATS, EncodedPacketSink, VideoSampleSink,
 } from '../vendor/mediabunny.min.mjs';
 
 /** Codec names as people know them. */
@@ -40,11 +40,16 @@ export class NotDecodable extends Error {
  * Throws NotDecodable when the container cannot be read or the browser has
  * no decoder for the codec; anything else is a real error.
  *
- * @param {Blob} file
+ * @param {Blob|string} file  a File or Blob, or the address of one — read in
+ *        pieces with range requests, so even a video of many gigabytes is never
+ *        held whole
  * @param {{onProgress?: (fraction:number) => void, signal?: AbortSignal}} opts
  */
 export async function openVideo(file, { onProgress = null, signal = null } = {}) {
-  const input = new Input({ source: new BlobSource(file), formats: ALL_FORMATS });
+  const from = typeof file === 'string'
+    ? new UrlSource(file, { maxCacheSize: 64 * 1024 * 1024 })
+    : new BlobSource(file);
+  const input = new Input({ source: from, formats: ALL_FORMATS });
   let format;
   try {
     format = await input.getFormat();
@@ -282,8 +287,32 @@ export class VideoSource {
     }
   }
 
+  /**
+   * Decode every frame from `first` to `last`, in order, and hand back every
+   * `step`th one, starting with `first`, as `{ index, sample }`. The caller
+   * draws each sample and must close it.
+   *
+   * Straight through, rather than asking for each wanted frame by time: a
+   * frame cannot be decoded without the frames it is built from, so skipping
+   * frames saves no decoding, while asking frame by frame restarts the decoder
+   * at every keyframe — which, over two hours of video, is most of the time.
+   */
+  async *sequence(first, last, step = 1, { signal = null } = {}) {
+    if (!this.seqSink) this.seqSink = new VideoSampleSink(this.track);
+    const start = this.times[first];
+    const end = this.times[last] + this.durations[last];
+    for await (const sample of this.seqSink.samples(start, end)) {
+      if (signal?.aborted) { sample.close(); throw new DOMException('Cancelled', 'AbortError'); }
+      // The sample's own time, a hair of slack included, names its frame.
+      const index = this.indexAt(sample.timestamp);
+      if (index < first || index > last || (index - first) % step !== 0) { sample.close(); continue; }
+      yield { index, sample };
+    }
+  }
+
   dispose() {
     this.sink = null;
+    this.seqSink = null;
     try { this.input.dispose?.(); } catch { /* already gone */ }
   }
 }

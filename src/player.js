@@ -56,7 +56,8 @@ export class Player extends EventTarget {
   load(blob, source) {
     this.unload();
     this.source = source;
-    this.url = URL.createObjectURL(blob);
+    // An address plays as it is; a File or Blob through an object URL.
+    this.url = typeof blob === 'string' ? blob : URL.createObjectURL(blob);
     const video = this.video;
     return new Promise((resolve, reject) => {
       let done = false;
@@ -99,7 +100,7 @@ export class Player extends EventTarget {
     this.video.pause();
     this.video.removeAttribute('src');
     this.video.load();
-    if (this.url) URL.revokeObjectURL(this.url);
+    if (this.url?.startsWith('blob:')) URL.revokeObjectURL(this.url);
     this.url = null;
     this.source = null;
     this.frame = 0;
@@ -233,6 +234,11 @@ export class Player extends EventTarget {
     };
     scrub.addEventListener('pointerdown', (e) => {
       if (!this.source || e.button !== 0) return;
+      // No text selection and no native drag: either would take the gesture
+      // over, and the next press would drag the selection instead of the
+      // playhead (the closed hand with a plus).
+      e.preventDefault();
+      window.getSelection()?.removeAllRanges();
       dragging = true;
       this.wasPlaying = this.playing;
       this.video.pause();

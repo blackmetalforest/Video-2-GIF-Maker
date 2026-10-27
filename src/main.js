@@ -7,13 +7,16 @@
  *     in the player (src/player.js). A file the browser cannot decode goes
  *     through ffmpeg first (src/ffmpeg.js).
  *  2. The start and end are marked on the video.
- *  3. Convert to Frames decodes the marked frames, plus three either side,
- *     into the filmstrip (src/filmstrip.js).
+ *  3. A frame size, a convert skip and a quality are chosen, and Convert to
+ *     Frames decodes the marked frames, plus three either side, into compressed
+ *     stills (src/frame-store.js) shown in the filmstrip (src/filmstrip.js).
+ *     If they would need more memory than a tab can comfortably hold, a dialog
+ *     suggests smaller sizes first.
  *  4. The GIF's first and last frame are picked there, and the settings —
  *     frame skip, size, crop, colours, captions — shape it. The GIF view
  *     shows the result, and Preview plays it at its real timing.
- *  5. Save renders every frame again from the video at full quality and
- *     encodes it (src/encoders/).
+ *  5. Save draws every kept frame from those converted frames — cropped,
+ *     captioned, at the GIF's size — and encodes it (src/encoders/).
  */
 
 import { openVideo, NotDecodable, formatFps } from './source.js';
@@ -21,38 +24,56 @@ import { Player } from './player.js';
 import { Filmstrip } from './filmstrip.js';
 import { CropTool } from './crop.js';
 import {
-  clampCrop, centredCrop, sizeForLongSide, sizeForWidth, sizeForHeight,
-  captionLayer, drawFrame, scaleCrop,
+  clampCrop, centredCrop, sizeForLongSide, captionLayer, drawFrame, scaleCrop,
 } from './compose.js';
 import { isBlank } from './overlay-text.js';
 import {
   keptFrames, summarise, frameStarts, frameIndexAt, FPS_LIMIT,
 } from './encoders/timing.js';
 import { encodeGif } from './encoders/gif.js';
-import { encodeStill, muxAnimation } from './encoders/webp.js';
+import { encodeStill, muxAnimationParts } from './encoders/webp.js';
 import { encodePng } from './encoders/png.js';
-import { muxApng } from './encoders/apng.js';
-import { encodeZip } from './encoders/frames.js';
+import { zipWriter, frameName } from './encoders/frames.js';
+import { FrameStore } from './frame-store.js';
+import { maybeYield } from './yield.js';
 import * as ffmpeg from './ffmpeg.js';
 
 const $ = (id) => document.getElementById(id);
 
 /** Extra frames taken either side of the marks, against off-by-one slips. */
 const PAD = 3;
-/** Memory the converted frames may use for the preview, in bytes. */
-const WORK_BUDGET = 640 * 1024 * 1024;
-/** The preview never needs frames bigger than this along their long side. */
-const WORK_MAX_SIDE = 1280;
-/** Past this many frames a conversion is refused: memory, and sense. */
-const FRAMES_MAX = 3000;
-/** And past this a warning, because the GIF will be enormous. */
+/** Past this many frames a warning, because the GIF will be enormous. */
 const FRAMES_HEAVY = 450;
 
-const FORMAT_LABELS = { gif: 'GIF', webp: 'WebP', apng: 'APNG', zip: 'ZIP' };
+/*
+ * Converted frames are kept as compressed WebP stills (src/frame-store.js),
+ * so their memory is an estimate made before converting: pixels times a
+ * typical number of bytes per pixel for the quality chosen, checked against
+ * the real figure once the first frames are in. There is no cap on the
+ * number of frames — only on memory.
+ *
+ * STORE_COMFORT is what the browser's blob store holds without trouble; it
+ * can spill to disk, so this is more than a tab's own memory. Past it Convert
+ * asks first, suggesting smaller sizes or more skip. STORE_HARD is past
+ * anything likely to work, where only smaller choices are offered.
+ */
+const GB = 1024 ** 3;
+const STORE_COMFORT = 3 * GB;
+const STORE_HARD = 16 * GB;
+/** Typical WebP bytes per pixel of video, by quality; a starting estimate. */
+const BYTES_PER_PIXEL = { 1: 1.6, 0.9: 0.32, 0.75: 0.17, 0.5: 0.1 };
+/** Each still's own overhead: its headers and the blob store's bookkeeping. */
+const BYTES_PER_FRAME = 600;
+/** Converted frames kept on their way to the encoder at once. */
+const ENCODES_IN_FLIGHT = 6;
+/** Frame sizes offered, by long side, when smaller than the video's own. */
+const FRAME_SIDES = [3840, 2560, 1920, 1440, 1280, 960, 720, 640, 480, 360, 240];
+
+const FORMAT_LABELS = { gif: 'GIF', webp: 'WebP', zip: 'ZIP' };
 
 /* ------------------------------------------------------------------ state */
 
-let file = null;             // the File chosen
+let file = null;             // the File chosen, or the address of one (?src=)
 let baseName = 'clip';       // its name without the extension
 let source = null;           // VideoSource the player and timecodes use
 let mode = 'native';         // 'native' | 'ffmpeg'
@@ -61,7 +82,6 @@ let loadToken = 0;           // bumps on every new file, so stale work can tell
 let clip = null;             // the converted frames; see convert()
 let sel = { start: 0, end: 0 };
 let crop = null;             // { x, y, w, h } in video pixels
-let size = { preset: 480, width: 480, height: 270 };
 let converting = null;       // AbortController while converting
 let saving = null;           // AbortController while saving
 let webpSupported = true;
@@ -93,17 +113,24 @@ function setBusy(text) {
 }
 
 function setProgress(id, fraction) {
+  // The Convert button under the video has no bar of its own: it counts.
+  if (id === 'convert-progress') {
+    $('convert-here').textContent = fraction === null || fraction >= 1
+      ? 'Convert to Frames' : `Converting… ${Math.round(fraction * 100)}%`;
+  }
   const wrap = $(`${id}-wrap`);
   if (fraction === null || fraction >= 1) { wrap.hidden = true; return; }
   wrap.hidden = false;
   $(id).style.width = `${Math.max(0, fraction) * 100}%`;
 }
 
-/** Seconds as people read them: 4.20 s, or 1:04.2 past a minute. */
+/** Seconds as people read them: 4.20 s, 1:04.2 past a minute, 2:06:46.8 past an hour. */
 function seconds(s) {
   if (s < 60) return `${s.toFixed(2)} s`;
-  const m = Math.floor(s / 60);
-  return `${m}:${(s - m * 60).toFixed(1).padStart(4, '0')}`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const rest = (s % 60).toFixed(1).padStart(4, '0');
+  return h ? `${h}:${String(m).padStart(2, '0')}:${rest}` : `${m}:${rest}`;
 }
 
 function duration(s) {
@@ -171,7 +198,15 @@ window.addEventListener('dragleave', () => {
   dragDepth = Math.max(0, dragDepth - 1);
   if (!dragDepth) $('app').classList.remove('dragover');
 });
-window.addEventListener('dragover', (e) => e.preventDefault());
+// Only a file being dragged in is welcome. Anything else — a text selection
+// picked up by accident — gets no drop cursor and no drop.
+window.addEventListener('dragover', (e) => {
+  if (e.dataTransfer?.types?.includes('Files')) e.preventDefault();
+});
+// Nothing in the app is meant to be dragged out of it.
+document.addEventListener('dragstart', (e) => {
+  if (e.target.closest?.('#work')) e.preventDefault();
+});
 window.addEventListener('drop', (e) => {
   e.preventDefault();
   dragDepth = 0;
@@ -189,8 +224,13 @@ async function handleFile(chosen) {
   stopEverything();
   file = chosen;
   original = null;
-  baseName = chosen.name.replace(/\.[^.]+$/, '') || 'clip';
-  $('file-name').value = chosen.name;
+  // An address (the ?src= route) is named after its last part.
+  const name = typeof chosen === 'string'
+    ? decodeURIComponent(chosen.split(/[?#]/)[0].split('/').pop() || 'video')
+    : chosen.name;
+  baseName = name.replace(/\.[^.]+$/, '') || 'clip';
+  $('file-name').value = name;
+  $('file-name').title = name;   // the whole name, however narrow the box
   mode = 'native';
   resetVideoState();
   $('video-info').textContent = 'Reading the video…';
@@ -232,6 +272,8 @@ function resetVideoState() {
   $('fallback-row').hidden = true;
   $('save-info').textContent = '';
   setTransportEnabled(false);
+  $('frame-size').disabled = true;
+  $('convert-skip').disabled = true;
   syncMarks();
   if (window.Preflight) window.Preflight.extras = { ...window.Preflight.extras, video: null };
 }
@@ -267,13 +309,18 @@ function videoReady() {
   if (window.Preflight) {
     window.Preflight.extras = { ...window.Preflight.extras, video: bits.join(' · ') };
   }
+  // The whole video is marked to begin with, so a short clip can be
+  // converted straight away and a long one only needs its marks moved in.
+  player.setMark('in', 0);
+  player.setMark('out', s.count - 1);
+  fillFrameSizes();
   syncMarks();
   updateFrameReadout();
   $('scrub').focus({ preventScroll: true });
 }
 
 function setTransportEnabled(on) {
-  for (const id of ['play', 'step-back', 'step-fwd', 'mark-in', 'mark-out', 'rate', 'mute']) {
+  for (const id of ['play', 'step-back', 'step-fwd', 'mark-in', 'mark-out', 'mute']) {
     $(id).disabled = !on;
   }
   syncMarks();
@@ -297,6 +344,12 @@ function offerFallback(err) {
           : err.message;
   $('video-info').innerHTML = `<span class="caution">${escapeHtml(what)}</span>`;
   if (err.reason === 'no-video') { $('fallback-row').hidden = true; return; }
+  if (typeof file === 'string') {
+    // ffmpeg reads a File; an address cannot be handed to it.
+    $('video-info').innerHTML += ' <span class="muted">Choose the file itself to convert it with ffmpeg.</span>';
+    $('fallback-row').hidden = true;
+    return;
+  }
   if (!ffmpeg.available) {
     $('video-info').innerHTML += ' <span class="muted">This browser cannot run ffmpeg either (no WebAssembly).</span>';
     return;
@@ -385,7 +438,6 @@ $('jump-in').addEventListener('click', () => jumpToMark('in'));
 $('jump-out').addEventListener('click', () => jumpToMark('out'));
 $('in-jump').addEventListener('click', () => jumpToMark('in'));
 $('out-jump').addEventListener('click', () => jumpToMark('out'));
-$('rate').addEventListener('input', () => { $('video').playbackRate = +$('rate').value; });
 $('mute').addEventListener('click', () => { $('video').muted = !$('video').muted; });
 
 /**
@@ -416,7 +468,7 @@ function syncMarks() {
   $('jump-out').disabled = !has || b === null;
 
   const ready = has && a !== null && b !== null;
-  $('convert').disabled = !ready || !!converting;
+  setConvertEnabled(ready && !converting);
   if (!has) $('clip-info').textContent = '—';
   else if (!ready) {
     $('clip-info').textContent = a === null && b === null
@@ -426,90 +478,277 @@ function syncMarks() {
     const frames = b - a + 1;
     const length = source.times[b] + source.durations[b] - source.times[a];
     let html = `${frames.toLocaleString()} frames · ${seconds(length)}`;
-    if (frames + 2 * PAD > FRAMES_MAX) html += ` · <span class="warn">too long: at most ${FRAMES_MAX.toLocaleString()} frames</span>`;
-    else if (frames > FRAMES_HEAVY) html += ' · <span class="caution">long: a big GIF</span>';
+    if (frames > FRAMES_HEAVY) html += ' · <span class="caution">long: a big GIF</span>';
     $('clip-info').innerHTML = html;
-    if (frames + 2 * PAD > FRAMES_MAX) $('convert').disabled = true;
   }
+  updateMemoryInfo();
 }
 
 /* -------------------------------------------------------------- convert */
 
-$('convert').addEventListener('click', () => convert());
+$('convert').addEventListener('click', () => requestConvert());
+$('convert-here').addEventListener('click', () => requestConvert());
+
+/** Both Convert to Frames buttons, the Clip section's and the one under the video. */
+function setConvertEnabled(on) {
+  $('convert').disabled = !on;
+  $('convert-here').disabled = !on;
+}
 $('convert-cancel').addEventListener('click', () => converting?.abort());
 
 function discardClip() {
   stopPreview();
-  if (clip) for (const b of clip.bitmaps) b?.close?.();
+  clip?.store.dispose();
   clip = null;
   strip.clear();
   cropTool.hide();
   $('crop-edit').checked = false;
   $('gif-canvas').hidden = true;
   $('gif-placeholder').hidden = false;
-  $('preview').disabled = true;
-  $('preview').checked = false;
   $('preview-mirror').checked = false;
   $('strip-info').textContent = 'No frames yet.';
   $('view-size').textContent = '';
-  $('strip-set-start').disabled = true;
-  $('strip-set-end').disabled = true;
+  setGifTransportEnabled(false);
+  $('gif-frame-number').value = 'frame —';
   setSaveEnabled(false);
   $('output-info').textContent = 'Convert to Frames first.';
   $('frames-info').textContent = '—';
 }
 
+/* ------------------------------------------------------------ frame size */
+
+/** The video's own frame size: the original's, even when a proxy is playing. */
+function baseSize() {
+  if (mode === 'ffmpeg' && original) return { w: original.width, h: original.height };
+  return { w: source.width, h: source.height };
+}
+
+/** Frames whose long side is `side` (0 for the video's own), keeping the shape. */
+function dimsFor(side) {
+  const { w, h } = baseSize();
+  const long = Math.max(w, h);
+  if (!(side > 0) || side >= long) return { w, h };
+  const k = side / long;
+  return { w: Math.max(2, Math.round(w * k)), h: Math.max(2, Math.round(h * k)) };
+}
+
+/** The Frame size menu, for this video: its own size, then smaller ones. */
+function fillFrameSizes() {
+  const select = $('frame-size');
+  const { w, h } = baseSize();
+  const long = Math.max(w, h);
+  const options = [`<option value="0">Original — ${w} × ${h}</option>`];
+  for (const side of FRAME_SIDES) {
+    if (side >= long) continue;
+    const d = dimsFor(side);
+    options.push(`<option value="${side}">${d.w} × ${d.h}</option>`);
+  }
+  options.push('<option value="custom">Custom…</option>');
+  select.innerHTML = options.join('');
+  select.value = '0';
+  select.disabled = false;
+  $('frame-size-custom').max = String(long);
+  $('frame-size-custom').value = String(Math.min(720, long));
+  $('frame-size-custom-row').hidden = true;
+
+  // Convert skip, labelled with the frame rate each leaves.
+  const fps = source.fps;
+  const skips = [];
+  for (let n = 0; n <= 29; n++) {
+    if (n > 15 && n % 5 !== 4) continue;
+    const rate = fps / (n + 1);
+    const label = n === 0 ? `None — every frame (${formatFps(fps)} fps)`
+      : `${n} — every ${ordinal(n + 1)} frame (${rate >= 10 ? rate.toFixed(0) : rate.toFixed(1)} fps)`;
+    skips.push(`<option value="${n}">${label}</option>`);
+  }
+  $('convert-skip').innerHTML = skips.join('');
+  $('convert-skip').value = '0';
+  $('convert-skip').disabled = false;
+}
+
+/** The long side chosen, in pixels; 0 is the video's own size. */
+function chosenSide() {
+  const v = $('frame-size').value;
+  if (v !== 'custom') return +v;
+  const long = Math.max(baseSize().w, baseSize().h);
+  return Math.max(16, Math.min(long, Math.round(+$('frame-size-custom').value) || long));
+}
+
+/** One frame in every `step` is converted. */
+const chosenStep = () => +$('convert-skip').value + 1;
+const chosenQuality = () => +$('frame-quality').value;
+
 /**
- * Decode the marked frames, and PAD more either side, into the filmstrip.
- *
- * What is kept is a scaled-down copy of each frame, for the preview and the
- * thumbnails — small enough that a few hundred fit in memory. Saving goes
- * back to the video for full-quality frames, so nothing here limits the
- * output.
+ * The frames Convert takes, as indices into the video: every `step`th frame,
+ * lined up so the start mark is one of them, with PAD more either side.
  */
-async function convert() {
-  if (!source || converting) return;
+function convertPlan(step = chosenStep()) {
   const { in: a, out: b } = player.marks;
-  if (a === null || b === null) return;
+  if (!source || a === null || b === null) return null;
+  const before = Math.min(PAD, Math.floor(a / step));
+  const first = a - before * step;
+  const lastMarked = a + Math.floor((b - a) / step) * step;
+  const after = Math.min(PAD, Math.floor((source.count - 1 - lastMarked) / step));
+  const last = lastMarked + after * step;
+  const count = (last - first) / step + 1;
+  return { first, last, step, count, padBefore: before, padAfter: after };
+}
+
+/** How many frames Convert would decode: the marked ones and the padding. */
+function framesToConvert() { return convertPlan()?.count ?? 0; }
+
+/** Stored size of `count` frames of `d` at `quality`: an estimate. */
+const bytesFor = (count, d, quality = chosenQuality()) =>
+  count * (d.w * d.h * (BYTES_PER_PIXEL[quality] ?? 0.32) + BYTES_PER_FRAME);
+
+function formatBytes(bytes) {
+  return bytes >= GB ? `${(bytes / GB).toFixed(1)} GB` : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`;
+}
+
+/** The estimate under Frame size, warned in orange past the comfortable. */
+function updateMemoryInfo() {
+  const count = framesToConvert();
+  if (!count) { $('memory-info').textContent = '—'; return; }
+  const d = dimsFor(chosenSide());
+  const bytes = bytesFor(count, d);
+  let html = `${count.toLocaleString()} frames at ${d.w} × ${d.h} ≈ ${formatBytes(bytes)}`;
+  if (bytes > STORE_COMFORT) html = `<span class="caution">${html} — more than a browser tab usually manages</span>`;
+  if (clip && (clip.workW !== d.w || clip.workH !== d.h || clip.step !== chosenStep())) {
+    html += `<br>The frames now are ${clip.workW} × ${clip.workH}` +
+      (clip.step > 1 ? `, every ${ordinal(clip.step)}` : '') + '. Convert again to change them.';
+  }
+  $('memory-info').innerHTML = html;
+}
+
+$('frame-size').addEventListener('input', () => {
+  $('frame-size-custom-row').hidden = $('frame-size').value !== 'custom';
+  updateMemoryInfo();
+});
+for (const id of ['frame-size-custom', 'convert-skip', 'frame-quality']) {
+  $(id).addEventListener('input', updateMemoryInfo);
+}
+
+/**
+ * Convert, unless the frames would need more memory than is comfortable — then
+ * ask first, offering the largest sizes that fit.
+ */
+function requestConvert() {
+  if (!source || converting) return;
+  const count = framesToConvert();
+  if (!count) return;
+  const side = chosenSide();
+  const bytes = bytesFor(count, dimsFor(side));
+  if (bytes <= STORE_COMFORT) { convert(side); return; }
+  showMemoryDialog(count, side, bytes);
+}
+
+const memoryDialog = document.createElement('div');
+memoryDialog.className = 'sheet';
+memoryDialog.hidden = true;
+document.body.append(memoryDialog);
+memoryDialog.addEventListener('click', (e) => { if (e.target === memoryDialog) memoryDialog.hidden = true; });
+
+function showMemoryDialog(count, side, bytes) {
+  const d = dimsFor(side);
+  // Every size on offer, largest first; the ones that fit are suggested.
+  const sides = [0, ...FRAME_SIDES].filter((s, i, all) => {
+    const dims = dimsFor(s);
+    return all.findIndex((t) => dimsFor(t).w === dims.w) === i && dims.w <= d.w && s !== side;
+  });
+  let fits = sides.filter((s) => bytesFor(count, dimsFor(s)) <= STORE_COMFORT).slice(0, 3);
+  if (!fits.length) fits = sides.filter((s) => bytesFor(count, dimsFor(s)) <= STORE_HARD).slice(-2);
+  const button = (s, primary) => {
+    const dims = dimsFor(s);
+    return `<button type="button" class="${primary ? 'primary' : ''}" data-side="${s}">` +
+      `Convert at ${dims.w} × ${dims.h} <span class="dim">· ${formatBytes(bytesFor(count, dimsFor(s)))}</span></button>`;
+  };
+  const anyway = bytes <= STORE_HARD
+    ? `<button type="button" data-side="${side}" data-anyway="1">Convert anyway at ${d.w} × ${d.h}</button>` : '';
+  memoryDialog.innerHTML = `
+    <div class="sheet-card memory-card" role="dialog" aria-modal="true" aria-labelledby="memory-title">
+      <h2 id="memory-title">That needs a lot of memory</h2>
+      <p>Converting <strong>${count.toLocaleString()} frames</strong> at <strong>${d.w} × ${d.h}</strong>
+        needs about <strong>${formatBytes(bytes)}</strong>. A browser tab usually manages about
+        ${formatBytes(STORE_COMFORT)} before it slows down or crashes.</p>
+      <p class="muted small">A smaller frame size or lower quality keeps the whole clip. More Convert
+        skip keeps fewer frames. A shorter clip — moving Start or End in — keeps the full size.
+        ${fits.length ? '' : ' Even the smallest size is too big for this clip: skip more frames or shorten it.'}</p>
+      <div class="memory-choices">
+        ${fits.map((s, i) => button(s, i === 0)).join('')}
+        ${anyway}
+        <button type="button" data-cancel="1">Cancel</button>
+      </div>
+    </div>`;
+  memoryDialog.hidden = false;
+  memoryDialog.querySelector('button')?.focus();
+  memoryDialog.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => {
+    memoryDialog.hidden = true;
+    if (b.dataset.cancel) return;
+    const chosen = +b.dataset.side;
+    // The menu follows the choice, so what was converted is what it shows.
+    const option = [...$('frame-size').options].find((o) => +o.value === chosen);
+    if (option) $('frame-size').value = option.value;
+    else { $('frame-size').value = 'custom'; $('frame-size-custom').value = String(chosen); }
+    $('frame-size-custom-row').hidden = $('frame-size').value !== 'custom';
+    convert(chosen);
+  }));
+}
+
+/**
+ * Decode the marked frames, and PAD more either side, at the chosen frame
+ * size, keeping one in every `step`, and store each as a compressed still.
+ *
+ * The decoder runs straight through the range (VideoSource.sequence); each
+ * kept frame is drawn straight onto a canvas of the frame size — the graphics
+ * card does the shrinking — and handed to the browser's WebP encoder, several
+ * at once, while the next is decoded.
+ */
+async function convert(side = chosenSide()) {
+  if (!source || converting) return;
+  const range = convertPlan();
+  if (!range) return;
   player.video.pause();
 
-  const first = Math.max(0, a - PAD);
-  const last = Math.min(source.count - 1, b + PAD);
-  const count = last - first + 1;
+  const { first, last, step, count } = range;
   const token = loadToken;
   converting = new AbortController();
   const { signal } = converting;
   discardClip();
-  $('convert').disabled = true;
+  setConvertEnabled(false);
   $('convert-cancel').disabled = false;
   $('convert-info').textContent = 'Decoding…';
   setProgress('convert-progress', 0);
 
-  // The working copy's size: the video's, unless that would not fit.
   const sw = source.width;
   const sh = source.height;
-  const byBudget = Math.sqrt(WORK_BUDGET / (count * sw * sh * 4));
-  const scale = Math.min(1, WORK_MAX_SIDE / Math.max(sw, sh), byBudget);
-  const workW = Math.max(2, Math.round(sw * scale));
-  const workH = Math.max(2, Math.round(sh * scale));
+  const { w: workW, h: workH } = dimsFor(side);
+  const quality = chosenQuality();
 
-  const times = Array.from({ length: count }, (_, k) => source.times[first + k]);
-  const durations = Array.from({ length: count }, (_, k) => source.durations[first + k]);
+  // The frames to be kept, and how long each stands for: until the next kept
+  // one, or for its `step` frames at the end.
+  const srcIndex = Array.from({ length: count }, (_, k) => first + k * step);
+  const times = srcIndex.map((i) => source.times[i]);
+  const durations = srcIndex.map((i, k) => {
+    if (k + 1 < count) return times[k + 1] - times[k];
+    const stop = Math.min(source.count - 1, i + step - 1);
+    return source.times[stop] + source.durations[stop] - source.times[i];
+  });
+  const store = new FrameStore({ width: workW, height: workH });
   const next = {
-    first, count, times, durations,
+    count, times, durations, srcIndex, step, quality, store,
     srcW: sw, srcH: sh, workW, workH, scale: workW / sw,
-    bitmaps: new Array(count).fill(null),
-    padBefore: a - first,
-    padAfter: last - b,
-    decode: null,             // { source, indices } for full-quality frames
-    label: (k) => (first + k).toLocaleString(),
+    padBefore: range.padBefore,
+    padAfter: range.padAfter,
+    label: (k) => srcIndex[k].toLocaleString(),
   };
-  strip.reset(count, sw / sh, next.label);
+  strip.reset(count, sw / sh, next.label, (k) => (store.blobs[k] ? store.get(k) : null));
   $('strip-info').textContent = 'Converting…';
 
+  let decodeFrom = source;
+  const started = performance.now();
   try {
-    let decodeFrom = source;
-    let indices = Array.from({ length: count }, (_, k) => first + k);
+    let from = first;
+    let to = last;
     if (mode === 'ffmpeg') {
       // ffmpeg cuts the range out of the original at full size, and that cut
       // is what every frame comes from from now on.
@@ -517,50 +756,77 @@ async function convert() {
       const cut = await ffmpeg.makeClip(file, {
         startTime: source.times[first],
         frameDuration: source.typicalStep,
-        count,
+        count: last - first + 1,
         signal,
         onProgress: (f) => setProgress('convert-progress', f * 0.5),
       });
       decodeFrom = await openVideo(cut);
-      if (decodeFrom.count < count) {
-        console.warn(`ffmpeg cut ${decodeFrom.count} frames, ${count} asked for`);
-      }
-      indices = Array.from({ length: Math.min(count, decodeFrom.count) }, (_, k) => k);
+      from = 0;
+      to = Math.min(last - first, decodeFrom.count - 1);
       next.srcW = decodeFrom.width;
       next.srcH = decodeFrom.height;
       next.scale = workW / decodeFrom.width;
     }
-    next.decode = { source: decodeFrom, indices };
 
-    let k = 0;
+    const canvas = new OffscreenCanvas(workW, workH);
+    const ctx = canvas.getContext('2d');
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    const inflight = new Set();
     const base = mode === 'ffmpeg' ? 0.5 : 0;
-    for await (const { canvas } of decodeFrom.frames(indices, { signal })) {
-      const bitmap = await createImageBitmap(canvas, {
-        resizeWidth: workW, resizeHeight: workH, resizeQuality: 'high',
+    let k = 0;
+    let shownAt = 0;
+    for await (const { sample } of decodeFrom.sequence(from, to, step, { signal })) {
+      try {
+        sample.drawWithFit(ctx, { fit: 'fill' });
+      } finally {
+        sample.close();
+      }
+      // convertToBlob copies the canvas at once, so the canvas is free for
+      // the next frame while this one encodes.
+      const at = k;
+      const job = canvas.convertToBlob({ type: 'image/webp', quality }).then((blob) => {
+        store.set(at, blob);
+        strip.draw(at);
       });
-      next.bitmaps[k] = bitmap;
-      strip.draw(k, bitmap);
+      inflight.add(job);
+      job.finally(() => inflight.delete(job));
+      if (inflight.size >= ENCODES_IN_FLIGHT) await Promise.race(inflight);
       k++;
-      setProgress('convert-progress', base + (k / indices.length) * (1 - base));
-      $('convert-info').textContent = `Decoding… ${k} of ${indices.length}`;
+      // Ten readouts a second is plenty.
+      const now = performance.now();
+      if (now - shownAt >= 100) {
+        shownAt = now;
+        const rate = k / ((now - started) / 1000);
+        setProgress('convert-progress', base + (k / count) * (1 - base));
+        $('convert-info').textContent = `Decoding… ${k.toLocaleString()} of ${count.toLocaleString()}` +
+          ` · ${rate.toFixed(0)} fps · ${formatBytes(store.bytes)}`;
+      }
+      if (k >= count) break;
     }
-    if (token !== loadToken) return;
-    // A short cut (ffmpeg found fewer frames than asked) trims the strip.
+    await Promise.all(inflight);
+    if (token !== loadToken) { store.dispose(); return; }
+    // Fewer frames than planned (a short ffmpeg cut, a truncated file): trim.
     if (k < count) {
       next.count = k;
       next.times.length = k;
       next.durations.length = k;
-      next.bitmaps.length = k;
+      next.srcIndex.length = k;
       next.padAfter = Math.max(0, next.padAfter - (count - k));
-      strip.reset(k, sw / sh, next.label);
-      next.bitmaps.forEach((bmp, i) => strip.draw(i, bmp));
+      strip.reset(k, sw / sh, next.label, (i) => (store.blobs[i] ? store.get(i) : null));
     }
+    if (!next.count) throw new Error('No frames could be decoded.');
     clip = next;
     sel = { start: clip.padBefore, end: Math.max(clip.padBefore, clip.count - 1 - clip.padAfter) };
-    $('convert-info').textContent = `${clip.count} frames, ${PAD} extra either side of the marks.`;
+    const secs = (performance.now() - started) / 1000;
+    $('convert-info').textContent =
+      `${clip.count.toLocaleString()} frames at ${workW} × ${workH}` +
+      (step > 1 ? `, every ${ordinal(step)}` : '') +
+      ` · ${formatBytes(store.bytes)} · ${secs.toFixed(secs < 10 ? 1 : 0)} s` +
+      ` · ${PAD} extra either side of the marks.`;
     clipReady();
   } catch (err) {
-    for (const bmp of next.bitmaps) bmp?.close?.();
+    store.dispose();
     strip.clear();
     if (isAbort(err)) {
       $('convert-info').textContent = 'Stopped.';
@@ -577,6 +843,8 @@ async function convert() {
     }
     $('strip-info').textContent = 'No frames yet.';
   } finally {
+    // ffmpeg's cut has done its job once its frames are decoded.
+    if (decodeFrom !== source) decodeFrom.dispose();
     converting = null;
     setProgress('convert-progress', null);
     $('convert-cancel').disabled = true;
@@ -590,9 +858,7 @@ function clipReady() {
   $('gif-placeholder').hidden = true;
   $('gif-canvas').hidden = false;
   requestAnimationFrame(fitCanvas);
-  $('preview').disabled = false;
-  $('strip-set-start').disabled = false;
-  $('strip-set-end').disabled = false;
+  setGifTransportEnabled(true);
   strip.select(sel.start, { scroll: false });
   strip.centre(sel.start);
   setSaveEnabled(true);
@@ -601,18 +867,45 @@ function clipReady() {
 
 /* ------------------------------------------------------------ filmstrip */
 
-strip.addEventListener('select', () => {
+strip.addEventListener('select', () => frameSelected());
+strip.addEventListener('set', (e) => setEnd(e.detail.which));
+
+/** A thumbnail was chosen: show it, and keep the video on the same frame. */
+function frameSelected() {
   stopPreview();
   showSelected();
-  // Keep the video on the same frame, so the two views agree.
   if (clip && source && !player.playing) {
-    const k = clip.first + strip.selected;
+    const k = clip.srcIndex[strip.selected];
     if (k < source.count) player.seekFrame(k);
   }
-});
-strip.addEventListener('set', (e) => setEnd(e.detail.which));
-$('strip-set-start').addEventListener('click', () => setEnd('start'));
-$('strip-set-end').addEventListener('click', () => setEnd('end'));
+}
+
+/** Select a frame from the GIF bar's buttons. */
+function selectFrame(k) {
+  if (!clip) return;
+  strip.select(k);
+  frameSelected();
+}
+
+const GIF_TRANSPORT = ['gif-set-start', 'gif-set-end', 'gif-jump-start', 'gif-step-back',
+  'gif-play', 'gif-step-fwd', 'gif-jump-end'];
+function setGifTransportEnabled(on) {
+  for (const id of GIF_TRANSPORT) $(id).disabled = !on;
+}
+
+$('gif-set-start').addEventListener('click', () => setEnd('start'));
+$('gif-set-end').addEventListener('click', () => setEnd('end'));
+$('gif-jump-start').addEventListener('click', () => selectFrame(sel.start));
+$('gif-jump-end').addEventListener('click', () => selectFrame(sel.end));
+$('gif-step-back').addEventListener('click', () => selectFrame(strip.selected - 1));
+$('gif-step-fwd').addEventListener('click', () => selectFrame(strip.selected + 1));
+$('gif-play').addEventListener('click', () => (previewing ? stopPreview() : startPreview()));
+
+/** The GIF bar's reading: which video frame is on show. */
+function showFrameNumber(k) {
+  if (!clip) return;
+  $('gif-frame-number').value = `frame ${clip.srcIndex[k].toLocaleString()}`;
+}
 
 /** Make the selected thumbnail the GIF's first or last frame. */
 function setEnd(which) {
@@ -674,14 +967,12 @@ $('crop-aspect').addEventListener('input', () => {
   resetCrop();
   // Choosing a shape is choosing to crop: show the box straight away.
   $('crop-edit').checked = !off && !!clip;
-  syncSizeFromCrop();
   refresh();
 });
 $('crop-edit').addEventListener('input', () => refresh());
 
 cropTool.addEventListener('input', (e) => {
   crop = { ...e.detail, srcW: crop.srcW, srcH: crop.srcH };
-  syncSizeFromCrop();
   updateCropInfo();
   updateSizeReadouts();
 });
@@ -695,35 +986,17 @@ function updateCropInfo() {
 
 /* ------------------------------------------------------------- the size */
 
-/** The output size follows the crop: the preset's long side, or the typed width. */
-function syncSizeFromCrop() {
-  if (!crop) return;
-  const next = size.preset !== null
-    ? sizeForLongSide(crop, size.preset)
-    : sizeForWidth(crop, size.width);
-  size = { ...size, ...next };
-  $('out-width').value = size.width;
-  $('out-height').value = size.height;
+/**
+ * The GIF's size: the crop at the converted frames' scale, made smaller if
+ * GIF size asks for it. Never larger — that would need new frames.
+ */
+function outputSize() {
+  const c = scaleCrop(clampCrop(crop, clip.srcW, clip.srcH), clip.scale);
+  const frame = { x: 0, y: 0, w: Math.max(2, Math.round(c.w)), h: Math.max(2, Math.round(c.h)) };
+  return { ...sizeForLongSide(frame, +$('gif-size').value), frameW: frame.w, frameH: frame.h };
 }
 
-$('preset').addEventListener('input', () => {
-  const v = $('preset').value;
-  size.preset = v === '' ? null : +v;
-  syncSizeFromCrop();
-  refresh();
-});
-for (const id of ['out-width', 'out-height']) {
-  $(id).addEventListener('change', () => {
-    if (!crop) return;
-    const typed = Math.max(16, Math.min(4096, Math.round(+$(id).value) || 16));
-    const next = id === 'out-width' ? sizeForWidth(crop, typed) : sizeForHeight(crop, typed);
-    size = { preset: null, ...next };
-    $('preset').value = '';
-    $('out-width').value = size.width;
-    $('out-height').value = size.height;
-    refresh();
-  });
-}
+$('gif-size').addEventListener('input', () => refresh());
 
 /* ---------------------------------------------------- refresh everything */
 
@@ -737,15 +1010,15 @@ function refresh() {
   syncReadouts();
   if (!clip) return;
   if (!crop) resetCrop();
-  syncSizeFromCrop();
 
   const { kept, idealMs } = readTiming();
   const gif = summarise(idealMs, 'gif');
   const caption = readCaption();
-  const { layer, band } = captionLayer(caption, size.width, size.height);
+  const out = outputSize();
+  const { layer, band } = captionLayer(caption, out.width, out.height);
   plan = {
     kept, idealMs, gif,
-    width: size.width, height: size.height, band, layer,
+    width: out.width, height: out.height, band, layer,
     crop: clampCrop(crop, clip.srcW, clip.srcH),
   };
 
@@ -763,22 +1036,26 @@ function refresh() {
 function updateFramesInfo() {
   if (!plan) return;
   const { kept, gif } = plan;
-  const tc = (k) => source?.timecode(Math.min(source.count - 1, clip.first + k)) ?? '';
+  const tc = (k) => source?.timecode(Math.min(source.count - 1, clip.srcIndex[k])) ?? '';
   $('strip-info').innerHTML =
     `GIF: <strong>${tc(sel.start)}</strong> → <strong>${tc(sel.end)}</strong> · ` +
-    `${sel.end - sel.start + 1} frames, ${kept.length} kept`;
-  let html = `${kept.length} frames · ${gif.fps.toFixed(gif.fps < 10 ? 1 : 0)} fps · ${seconds(gif.totalMs / 1000)}`;
+    `${(sel.end - sel.start + 1).toLocaleString()} frames, ${kept.length.toLocaleString()} kept`;
+  let html = `${kept.length.toLocaleString()} frames · ${gif.fps.toFixed(gif.fps < 10 ? 1 : 0)} fps · ${seconds(gif.totalMs / 1000)}`;
   if (gif.slowed) {
     html += ` · <span class="caution">too fast for GIF players (max ${FPS_LIMIT} fps), so it plays slower — use Frame skip</span>`;
   }
   $('frames-info').innerHTML = html;
   $('output-info').innerHTML =
-    `${plan.width} × ${plan.height + plan.band} px · ${kept.length} frames · ${seconds(gif.totalMs / 1000)}`;
+    `${plan.width} × ${plan.height + plan.band} px · ${kept.length.toLocaleString()} frames · ${seconds(gif.totalMs / 1000)}`;
 }
 
 function updateSizeReadouts() {
-  if (!clip) { $('view-size').textContent = ''; return; }
-  $('view-size').textContent = `${size.width} × ${size.height + (plan?.band ?? 0)}`;
+  if (!clip || !crop) { $('view-size').textContent = ''; $('size-info').textContent = '—'; return; }
+  const out = outputSize();
+  const band = plan?.band ?? 0;
+  $('view-size').textContent = `${out.width} × ${out.height + band}`;
+  $('size-info').textContent = `GIF: ${out.width} × ${out.height + band}` +
+    (out.width < out.frameW ? ` (the cropped frames are ${out.frameW} × ${out.frameH})` : '');
 }
 
 /** The slider readings and notes that do not depend on frames. */
@@ -788,8 +1065,8 @@ function syncReadouts() {
   $('skip-note').textContent = skip === 0 ? 'Every frame is kept.'
     : skip === 1 ? 'Every 2nd frame is kept, each shown twice as long.'
       : `Every ${ordinal(skip + 1)} frame is kept, each shown ${skip + 1}× as long.`;
-  $('speed-out').value = `${$('speed').value}%`;
-  $('colours-out').value = $('colours').value;
+  $('speed-out').value = `${(+$('speed').value).toLocaleString()}%`;
+  $('colors-out').value = $('colors').value;
   $('webp-quality-out').value = $('webp-quality').value;
   $('webp-quality').disabled = $('webp-lossless').checked;
   $('text-stroke-out').value = (+$('text-stroke').value).toFixed(1);
@@ -808,7 +1085,7 @@ function ordinal(n) {
 }
 
 for (const id of ['skip', 'speed']) $(id).addEventListener('input', () => refresh());
-for (const id of ['colours', 'webp-quality', 'webp-lossless', 'dither', 'size-limit']) {
+for (const id of ['colors', 'webp-quality', 'webp-lossless', 'dither', 'size-limit']) {
   $(id).addEventListener('input', syncReadouts);
 }
 for (const id of ['text-mode', 'text-top', 'text-middle', 'text-bottom', 'text-band-copy',
@@ -823,21 +1100,20 @@ $('text-font').addEventListener('input', () => {
 
 $('reset-frames').addEventListener('click', () => {
   $('skip').value = 0;
-  $('speed').value = 100;
+  setSliderValue('speed', 100);
   if (clip) sel = { start: clip.padBefore, end: Math.max(clip.padBefore, clip.count - 1 - clip.padAfter) };
   refresh();
 });
 $('reset-size').addEventListener('click', () => {
-  $('preset').value = '480';
-  size = { preset: 480, width: 480, height: 270 };
+  $('gif-size').value = '0';
   $('crop-aspect').value = 'off';
   $('crop-rows').hidden = true;
   $('crop-edit').checked = false;
   resetCrop();
   refresh();
 });
-$('reset-colour').addEventListener('click', () => {
-  $('colours').value = 256;
+$('reset-color').addEventListener('click', () => {
+  $('colors').value = 256;
   $('dither').checked = true;
   $('webp-quality').value = 85;
   $('webp-lossless').checked = false;
@@ -857,9 +1133,26 @@ function showSelected() {
   drawGifFrame(k);
 }
 
+/*
+ * Frames come from the store, which may have to decode one first. A frame
+ * still decoding when a newer one is asked for is not drawn when it arrives:
+ * the newest request wins, so stepping fast never shows frames out of order.
+ */
+let drawToken = 0;
+
 function drawGifFrame(k) {
-  const bitmap = clip.bitmaps[k];
-  if (!bitmap) return;
+  if (!clip) return;
+  const token = ++drawToken;
+  const ready = clip.store.peek(k);
+  if (ready) { paintGifFrame(k, ready); return; }
+  const store = clip.store;
+  store.get(k).then((bitmap) => {
+    if (token === drawToken && clip?.store === store) paintGifFrame(k, bitmap);
+  }, () => {});
+}
+
+function paintGifFrame(k, bitmap) {
+  showFrameNumber(k);
   const editing = $('crop-edit').checked && $('crop-aspect').value !== 'off';
   if (editing) {
     if (gifCanvas.width !== clip.workW || gifCanvas.height !== clip.workH) {
@@ -894,17 +1187,19 @@ function fitCanvas() {
   const sw = stage.clientWidth - pad;
   const sh = stage.clientHeight - pad;
   if (sw <= 0 || sh <= 0) return;
-  const scale = Math.min(sw / gifCanvas.width, sh / gifCanvas.height);
+  const fit = Math.min(sw / gifCanvas.width, sh / gifCanvas.height);
+  // Actual pixels: the size a browser shows the GIF at, one GIF pixel to a
+  // CSS pixel — shrunk only if it would not otherwise fit. Off, small GIFs are
+  // blown up to fill the view.
+  const scale = $('actual-pixels').checked ? Math.min(1, fit) : fit;
   gifCanvas.style.width = `${Math.floor(gifCanvas.width * scale)}px`;
   gifCanvas.style.height = `${Math.floor(gifCanvas.height * scale)}px`;
   gifCanvas.classList.toggle('pixelated', scale >= 2);
   cropTool.place();
 }
 new ResizeObserver(() => fitCanvas()).observe($('gif-stage'));
+$('actual-pixels').addEventListener('input', () => fitCanvas());
 
-$('show-border').addEventListener('input', () => {
-  gifCanvas.classList.toggle('show-border', $('show-border').checked);
-});
 
 /* -------------------------------------------------------------- preview */
 
@@ -920,6 +1215,8 @@ let previewShown = -1;
 let previewRaf = 0;
 let cycle = { starts: [], totalMs: 0 };
 let rate = { shown: 0, since: 0 };
+/** Frames the preview decodes ahead of the one showing. */
+const PREFETCH_AHEAD = 24;
 
 function rebuildPreviewCycle() {
   if (!plan) return;
@@ -938,7 +1235,7 @@ function startPreview() {
   previewEpoch = performance.now();
   previewShown = -1;
   rate = { shown: 0, since: performance.now() };
-  $('preview').checked = true;
+  $('gif-play').textContent = '❚❚';
   $('preview-mirror').checked = true;
   player.video.pause();
   previewRaf = requestAnimationFrame(previewTick);
@@ -948,7 +1245,7 @@ function stopPreview() {
   if (!previewing) return;
   previewing = false;
   cancelAnimationFrame(previewRaf);
-  $('preview').checked = false;
+  $('gif-play').textContent = '▶︎';
   $('preview-mirror').checked = false;
   $('preview-fps').value = '';
   showSelected();
@@ -961,6 +1258,13 @@ function previewTick(now) {
     previewShown = i;
     drawGifFrame(plan.kept[i]);
     rate.shown++;
+    // The frames about to play, decoded ahead of their turn — wrapping round
+    // to the start as the loop will.
+    const ahead = [];
+    for (let n = 1; n <= PREFETCH_AHEAD && n < plan.kept.length; n++) {
+      ahead.push(plan.kept[(i + n) % plan.kept.length]);
+    }
+    clip.store.prefetch(ahead);
   }
   // The rate actually achieved, once a second.
   if (now - rate.since >= 1000) {
@@ -971,7 +1275,6 @@ function previewTick(now) {
   previewRaf = requestAnimationFrame(previewTick);
 }
 
-$('preview').addEventListener('input', () => ($('preview').checked ? startPreview() : stopPreview()));
 $('preview-mirror').addEventListener('input', () => {
   if (!clip) { $('preview-mirror').checked = false; return; }
   if ($('preview-mirror').checked) startPreview(); else stopPreview();
@@ -991,22 +1294,24 @@ document.querySelectorAll('.save').forEach((b) => {
 $('save-cancel').addEventListener('click', () => saving?.abort());
 
 /**
- * Render frames at full quality, straight from the video, at the plan's size.
- * Yields one ImageData at a time; nothing is kept between frames.
+ * The finished frames, one at a time, drawn from the converted frames at the
+ * plan's size. Nothing is kept between frames.
  *
  * @param {object} p        a plan (see refresh())
  * @param {number[]} which  positions in p.kept, ascending
  */
 async function* renderFrames(p, which, signal) {
-  const { source: from, indices } = clip.decode;
   const canvas = new OffscreenCanvas(p.width, p.height + p.band);
   const ctx = canvas.getContext('2d', { willReadFrequently: true });
-  // The full-size crop, in the decoded frame's pixels.
-  const fullCrop = scaleCrop(p.crop, from.width / clip.srcW);
-  const wanted = which.map((i) => indices[p.kept[i]]);
-  for await (const { canvas: frame } of from.frames(wanted, { signal })) {
+  const frameCrop = scaleCrop(p.crop, clip.scale);
+  const store = clip.store;
+  for (let n = 0; n < which.length; n++) {
+    if (signal?.aborted) throw new DOMException('Cancelled', 'AbortError');
+    // Keep the decoder a little ahead of the encoder.
+    if (n % 8 === 0) store.prefetch(which.slice(n + 1, n + 1 + PREFETCH_AHEAD).map((i) => p.kept[i]));
+    const bitmap = await store.get(p.kept[which[n]]);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
-    drawFrame(ctx, frame, fullCrop, p);
+    drawFrame(ctx, bitmap, frameCrop, p);
     yield ctx.getImageData(0, 0, canvas.width, canvas.height);
   }
 }
@@ -1030,7 +1335,7 @@ async function save(format) {
   $('save-cancel').closest('.row').hidden = false;
   $('save-info').textContent = '';
 
-  const startTc = source.timecode(Math.min(source.count - 1, clip.first + sel.start));
+  const startTc = source.timecode(Math.min(source.count - 1, clip.srcIndex[sel.start]));
   const name = `${baseName}_${fileTimecode(startTc)}`;
   let p = plan;
   let note = '';
@@ -1056,7 +1361,7 @@ async function save(format) {
         `Saved ${escapeHtml(`${name}.${result.extension}`)} — ${fileSizeHtml(result.blob.size)}` +
         escapeHtml(result.note ? ` · ${result.note}` : '') + escapeHtml(note);
       if (limit && result.blob.size > limit) {
-        $('save-info').innerHTML += ` · <span class="caution">still over ${limitMb} MB: try more frame skip or fewer colours</span>`;
+        $('save-info').innerHTML += ` · <span class="caution">still over ${limitMb} MB: try more frame skip or fewer colors</span>`;
       }
       break;
     }
@@ -1084,12 +1389,12 @@ async function encode(format, p, { signal, progress, status }) {
       count,
       render: (which) => renderFrames(p, which, signal),
       delays: p.gif.delays,
-      colours: +$('colours').value,
+      colours: +$('colors').value,
       dither: $('dither').checked,
       onProgress: progress,
       cancelled: () => signal.aborted,
     });
-    return { blob, extension: 'gif', note: `${seconds(p.gif.totalMs / 1000)} · ${$('colours').value} colours` };
+    return { blob, extension: 'gif', note: `${seconds(p.gif.totalMs / 1000)} · ${$('colors').value} colors` };
   }
 
   if (format === 'webp') {
@@ -1101,43 +1406,35 @@ async function encode(format, p, { signal, progress, status }) {
     for await (const frame of renderFrames(p, all, signal)) {
       stills.push({ data: await encodeStill(frame, { quality, lossless }), duration: info.delays[i] });
       progress(++i, count);
+      await maybeYield();
     }
-    const blob = new Blob([muxAnimation(stills, { width: p.width, height: p.height + p.band, loop: 0 })],
+    status('Assembling WebP…');
+    const blob = new Blob(muxAnimationParts(stills, { width: p.width, height: p.height + p.band, loop: 0 }),
       { type: 'image/webp' });
     let note = `${seconds(info.totalMs / 1000)}`;
     if (lossless) note += isLosslessWebp(stills[0].data) ? ' · lossless' : ' · lossy: this browser has no lossless WebP';
     return { blob, extension: 'webp', note };
   }
 
-  if (format === 'apng' || format === 'zip') {
-    const info = summarise(p.idealMs, 'apng');
-    const pngs = [];
+  if (format === 'zip') {
+    // Packed as it goes: a long clip's frames are never all held at once.
+    const zip = zipWriter(`${baseName}_frames`);
     let i = 0;
     for await (const frame of renderFrames(p, all, signal)) {
-      pngs.push(encodePng(frame, { level: 6 }));
+      zip.add(frameName(i, count), encodePng(frame, { level: 6 }));
       progress(++i, count);
-      await new Promise((r) => setTimeout(r, 0));
-    }
-    if (format === 'apng') {
-      status('Assembling APNG…');
-      const frames = pngs.map((data, k) => ({ data, delay: info.delays[k] }));
-      const blob = new Blob([muxApng(frames, { width: p.width, height: p.height + p.band, loop: 0 })],
-        { type: 'image/apng' });
-      return { blob, extension: 'png', note: `${seconds(info.totalMs / 1000)} · lossless` };
+      await maybeYield();
     }
     status('Packing ZIP…');
     // The timing travels with the frames, for anyone rebuilding the animation.
     const timing = p.kept.map((k, n) => ({
-      file: `frame_${String(n).padStart(Math.max(3, String(count - 1).length), '0')}.png`,
-      videoFrame: clip.first + k,
-      timecode: source.timecode(Math.min(source.count - 1, clip.first + k)),
+      file: frameName(n, count),
+      videoFrame: clip.srcIndex[k],
+      timecode: source.timecode(Math.min(source.count - 1, clip.srcIndex[k])),
       delayMs: Math.round(p.idealMs[n] * 1000) / 1000,
     }));
-    const blob = encodeZip(pngs, {
-      name: `${baseName}_frames`,
-      extra: { 'timing.json': new TextEncoder().encode(JSON.stringify(timing, null, 2)) },
-    });
-    return { blob, extension: 'zip', note: `${count} PNG frames` };
+    zip.add('timing.json', new TextEncoder().encode(JSON.stringify(timing, null, 2)), { compress: true });
+    return { blob: zip.finish(), extension: 'zip', note: `${count.toLocaleString()} PNG frames` };
   }
   throw new Error(`Unknown format ${format}`);
 }
@@ -1161,17 +1458,58 @@ function isLosslessWebp(bytes) {
  * in the spinning GIF maker. The value goes back out as an ordinary input
  * event, so everything watching the slider reacts exactly as to a drag.
  */
-const NUMBER_IDS = ['skip', 'speed', 'colours', 'webp-quality', 'text-stroke', 'text-size'];
+const NUMBER_IDS = ['skip', 'speed', 'colors', 'webp-quality', 'text-stroke', 'text-size'];
+
+/**
+ * Values that can be typed past the slider's own ends. GIF speed's slider
+ * stops at 2000%, but any speed can be typed; past the point where every frame
+ * is at the 20 ms floor it makes no difference, and the Frames line says so.
+ */
+const TYPED_RANGE = { speed: [1, 100000] };
+
+/** Each slider's own range, captured before anything stretches it. */
+const baseRanges = new Map(NUMBER_IDS.map((id) => {
+  const el = $(id);
+  return [id, { min: el.min, max: el.max, step: el.step }];
+}));
+
+/**
+ * Put a typed value on a slider, stretching the slider if it does not reach.
+ * The slider keeps holding the value, so there is no second copy to fall out
+ * of step; dragging it back inside its usual range restores the usual scale.
+ */
+function setSliderValue(id, value) {
+  const el = $(id);
+  const base = baseRanges.get(id);
+  el.min = String(Math.min(+base.min, value));
+  el.max = String(Math.max(+base.max, value));
+  const outside = value < +base.min || value > +base.max;
+  el.step = outside ? 'any' : base.step;
+  el.value = String(value);
+}
+
+for (const id of Object.keys(TYPED_RANGE)) {
+  // On change, not input: rescaling mid-drag would move the thumb under the pointer.
+  $(id).addEventListener('change', () => {
+    const el = $(id);
+    const base = baseRanges.get(id);
+    const v = +el.value;
+    if (v >= +base.min && v <= +base.max) { el.min = base.min; el.max = base.max; el.step = base.step; }
+  });
+}
+
 function editNumber(id) {
   const out = $(`${id}-out`);
   const slider = $(id);
   if (out.hidden || slider.disabled) return;
+  const [lo, hi] = TYPED_RANGE[id] ?? [+baseRanges.get(id).min, +baseRanges.get(id).max];
   const box = document.createElement('input');
   box.type = 'number';
   box.className = 'number-edit';
   box.value = String(+slider.value);
-  box.min = slider.min;
-  box.max = slider.max;
+  box.min = String(lo);
+  box.max = String(hi);
+  box.title = `${lo} to ${hi}`;
   box.step = 'any';
   let closed = false;
   const close = (commit) => {
@@ -1181,7 +1519,7 @@ function editNumber(id) {
     box.remove();
     out.hidden = false;
     if (!commit || !Number.isFinite(typed)) return;
-    slider.value = String(Math.min(+slider.max, Math.max(+slider.min, typed)));
+    setSliderValue(id, Math.min(hi, Math.max(lo, typed)));
     slider.dispatchEvent(new Event('input', { bubbles: true }));
   };
   box.addEventListener('keydown', (e) => {
@@ -1225,7 +1563,7 @@ document.addEventListener('keydown', (e) => {
     case 'End': jumpToMark('out'); break;
     case 'm': case 'M': $('video').muted = !$('video').muted; break;
     case 'p': case 'P': if (clip) (previewing ? stopPreview() : startPreview()); break;
-    case 'Enter': if (t === document.body && !$('convert').disabled) convert(); else handled = false; break;
+    case 'Enter': if (t === document.body && !$('convert').disabled) requestConvert(); else handled = false; break;
     default: handled = false;
   }
   if (handled) e.preventDefault();
@@ -1283,6 +1621,13 @@ async function checkWebp() {
 }
 
 syncReadouts();
+// ?src=<address> opens a video by address, read in pieces with range requests
+// — the way to test a video of many gigabytes, which a browser's file picker
+// cannot be driven to open from a test. See "Testing" in the README.
+const startSrc = new URLSearchParams(location.search).get('src');
+if (startSrc) queueMicrotask(() => handleFile(startSrc));
+// Sound starts off: a clip being scrubbed through is noise more often than not.
+$('video').muted = true;
 $('dropzone').hidden = false;
 checkWebp();
 window.Preflight?.ready();

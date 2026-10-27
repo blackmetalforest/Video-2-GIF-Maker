@@ -122,6 +122,20 @@ function chunk(fourcc, payload) {
  * @returns {Uint8Array} the animated WebP file
  */
 export function muxAnimation(frames, opts) {
+  const parts = muxAnimationParts(frames, opts);
+  const total = parts.reduce((n, p) => n + p.length, 0);
+  const file = new Uint8Array(total);
+  let at = 0;
+  for (const p of parts) { file.set(p, at); at += p.length; }
+  return file;
+}
+
+/**
+ * The same file as muxAnimation(), as a list of pieces for a Blob, so a long
+ * animation never has to exist as one buffer — or twice over while it is
+ * being copied into one.
+ */
+export function muxAnimationParts(frames, opts) {
   if (!frames || frames.length === 0) throw new Error('No frames to mux');
   const { width, height, loop = 0, background = 0x00000000 } = opts;
   if (!width || !height) throw new Error('muxAnimation needs canvas width and height');
@@ -162,13 +176,11 @@ export function muxAnimation(frames, opts) {
   const body = [chunk('VP8X', vp8x), chunk('ANIM', anim), ...anmfChunks];
   const bodyLength = body.reduce((n, c) => n + c.length, 0);
 
-  const file = new Uint8Array(12 + bodyLength);
-  file.set(FOURCC('RIFF'), 0);
-  writeU32(file, 4, 4 + bodyLength);              // everything after this field
-  file.set(FOURCC('WEBP'), 8);
-  let at = 12;
-  for (const c of body) { file.set(c, at); at += c.length; }
-  return file;
+  const header = new Uint8Array(12);
+  header.set(FOURCC('RIFF'), 0);
+  writeU32(header, 4, 4 + bodyLength);            // everything after this field
+  header.set(FOURCC('WEBP'), 8);
+  return [header, ...body];
 }
 
 /**

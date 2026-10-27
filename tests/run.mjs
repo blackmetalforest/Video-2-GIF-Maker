@@ -23,8 +23,7 @@ import {
 } from '../src/compose.js';
 import { encodeGif, paletteSamples } from '../src/encoders/gif.js';
 import { encodePng, readChunks as pngChunks } from '../src/encoders/png.js';
-import { muxApng } from '../src/encoders/apng.js';
-import { muxAnimation, readChunks as webpChunks } from '../src/encoders/webp.js';
+import { muxAnimation, muxAnimationParts, readChunks as webpChunks } from '../src/encoders/webp.js';
 import { frameName, encodeZip } from '../src/encoders/frames.js';
 import { unzipSync } from '../vendor/fflate.module.js';
 
@@ -222,6 +221,20 @@ console.log('\nGIF');
       found.join() === delays.join(), found.join());
     check(`GIF${dither ? ' (dithered)' : ''} ends with a trailer`, bytes[bytes.length - 1] === 0x3b);
   }
+  // Written in pieces — here absurdly small ones, one per frame or less —
+  // the file must come out byte for byte the same as written whole.
+  {
+    const whole = new Uint8Array(await (await encodeGif({ count: 4, render, delays, dither: false })).arrayBuffer());
+    const pieces = new Uint8Array(await (await encodeGif({ count: 4, render, delays, dither: false, pieceBytes: 16 })).arrayBuffer());
+    check('a GIF written in pieces is identical to one written whole',
+      whole.length === pieces.length && whole.every((b, i) => b === pieces[i]), `${whole.length} vs ${pieces.length}`);
+    const headers = (bytes) => {
+      let n = 0;
+      for (let i = 0; i + 6 < bytes.length; i++) if (bytes[i] === 0x47 && bytes[i + 1] === 0x49 && bytes[i + 2] === 0x46 && bytes[i + 3] === 0x38) n++;
+      return n;
+    };
+    check('a GIF written in pieces has one header', headers(pieces) === 1, `${headers(pieces)}`);
+  }
   let threw = false;
   try {
     await encodeGif({ count: 2, render, delays, cancelled: () => true });
@@ -229,20 +242,12 @@ console.log('\nGIF');
   check('a cancelled GIF stops with AbortError', threw);
 }
 
-console.log('\nPNG, APNG, ZIP');
+console.log('\nPNG and ZIP');
 {
   const img = { width: 3, height: 2, data: new Uint8ClampedArray(3 * 2 * 4).fill(200) };
   const png = encodePng(img);
   const chunks = pngChunks(png).map((c) => c.type);
   check('PNG chunks are IHDR IDAT IEND', chunks.join() === 'IHDR,IDAT,IEND', chunks.join());
-  const apng = muxApng([{ data: png, delay: 33 }, { data: png, delay: 34 }], { width: 3, height: 2 });
-  const types = pngChunks(apng).map((c) => c.type);
-  check('APNG has acTL before the first IDAT', types.indexOf('acTL') < types.indexOf('IDAT'));
-  check('APNG has one fcTL per frame', types.filter((t) => t === 'fcTL').length === 2);
-  check('APNG second frame is fdAT', types.includes('fdAT'));
-  const fctl = pngChunks(apng).filter((c) => c.type === 'fcTL').map((c) => (c.data[20] << 8) | c.data[21]);
-  check('APNG delays are in milliseconds', fctl.join() === '33,34', fctl.join());
-
   check('frame names sort', frameName(7, 30) === 'frame_007.png' && frameName(7, 2000) === 'frame_0007.png');
   const zip = await encodeZip([png, png], { name: 'clip', extra: { 'timing.json': new TextEncoder().encode('[]') } });
   const files = Object.keys(unzipSync(new Uint8Array(await zip.arrayBuffer()))).sort();
@@ -262,6 +267,9 @@ console.log('\nWebP mux');
   still.set([87, 69, 66, 80, 86, 80, 56, 76, vp8l.length, 0, 0, 0], 8);
   still.set(vp8l, 20);
   const anim = muxAnimation([{ data: still, duration: 33 }, { data: still, duration: 34 }], { width: 3, height: 1 });
+  const parts = muxAnimationParts([{ data: still, duration: 33 }, { data: still, duration: 34 }], { width: 3, height: 1 });
+  const joined = new Uint8Array(await new Blob(parts).arrayBuffer());
+  check('animated WebP in pieces is the same file', joined.length === anim.length && joined.every((b, i) => b === anim[i]));
   const { chunks } = webpChunks(anim);
   check('animated WebP has VP8X, ANIM and ANMF', !!chunks.VP8X && !!chunks.ANIM && !!chunks.ANMF);
 }

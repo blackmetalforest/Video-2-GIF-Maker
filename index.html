@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Video 2 GIF Maker</title>
-<meta name="description" content="Cut a clip out of a video, frame by frame, and save it as a GIF, animated WebP, APNG or a ZIP of frames. Runs entirely in your browser.">
+<meta name="description" content="Cut a clip out of a video, frame by frame, and save it as a GIF, animated WebP or a ZIP of frames. Runs entirely in your browser.">
 <!--
   Checks the browser before the app starts, and says what is wrong if it
   cannot run. A classic script, first, so it still runs when the app's own
@@ -52,12 +52,47 @@
 
     <section class="group" id="group-clip">
       <h2>Clip</h2>
-      <p class="muted small">Scrub the video, then press <strong>⟦ Start</strong> and <strong>End ⟧</strong> under it.</p>
+      <p class="muted small">Scrub the video, then press <strong>Start</strong> and <strong>End</strong> under it.</p>
       <div class="row mark-row"><label>Start</label>
         <button type="button" class="mark-jump" id="in-jump" disabled title="Go to the start mark">—</button></div>
       <div class="row mark-row"><label>End</label>
         <button type="button" class="mark-jump" id="out-jump" disabled title="Go to the end mark">—</button></div>
       <p id="clip-info" class="muted small">—</p>
+      <!--
+        The size frames are converted at. Everything after — the preview, the
+        crop, every save — works from frames of this size, so it is chosen
+        here, before converting. The options are filled in for each video.
+      -->
+      <div class="frame-size">
+        <div class="row"><label for="frame-size">Frame size</label>
+          <select id="frame-size" disabled
+                  title="The size frames are converted at. Original keeps every pixel; smaller sizes use far less memory.">
+            <option value="0">Original</option>
+          </select></div>
+        <div class="row" id="frame-size-custom-row" hidden><label for="frame-size-custom">Long side</label>
+          <input type="number" id="frame-size-custom" min="16" max="8192" step="1" value="720"
+                 title="The longer side of each frame, in pixels. The other side keeps the video's shape.">
+          <span class="muted small">px</span></div>
+        <!--
+          Skipping frames here means they are never converted at all: the way
+          to make a GIF of hours of video. Frame skip in the Frames section
+          thins the converted frames further, without converting again.
+        -->
+        <div class="row"><label for="convert-skip">Convert skip</label>
+          <select id="convert-skip" disabled
+                  title="Convert only every so many frames. Each one kept stands for the frames skipped after it, so the timing is unchanged.">
+            <option value="0">None — every frame</option>
+          </select></div>
+        <div class="row"><label for="frame-quality">Quality</label>
+          <select id="frame-quality"
+                  title="Converted frames are stored as compressed WebP pictures. Lower quality stores far more frames in the same memory.">
+            <option value="1">Lossless</option>
+            <option value="0.9" selected>High</option>
+            <option value="0.75">Medium</option>
+            <option value="0.5">Low</option>
+          </select></div>
+        <p id="memory-info" class="muted small">—</p>
+      </div>
       <div class="row actions">
         <button id="convert" class="primary" disabled>Convert to Frames</button>
         <button id="convert-cancel" disabled>Cancel</button>
@@ -74,43 +109,20 @@
                title="Leave out this many frames after each one kept. Each kept frame is held longer, so the GIF still runs at the video's speed.">
         <output for="skip" id="skip-out">0</output></div>
       <p id="skip-note" class="muted small">Every frame is kept.</p>
+      <div class="row"><label for="speed">GIF speed</label>
+        <input type="range" id="speed" min="10" max="2000" step="5" value="100"
+               title="Play the GIF faster or slower than the video. 100% matches the video. Double-click the number to type any speed.">
+        <output for="speed" id="speed-out">100%</output></div>
       <div class="loop-row">
         <p id="frames-info" class="muted small">—</p>
         <label class="loop-preview"><input type="checkbox" id="preview-mirror"
                title="The same as Preview under the GIF: plays it at the output's real timing."> Preview</label>
       </div>
-      <details class="more" id="frames-more">
-        <summary>Advanced</summary>
-        <div class="row"><label for="speed">GIF speed</label>
-          <input type="range" id="speed" min="25" max="400" step="5" value="100"
-                 title="Play the GIF faster or slower than the video. 100% matches the video.">
-          <output for="speed" id="speed-out">100%</output></div>
-      </details>
     </section>
 
     <section class="group" id="group-size">
       <div class="group-head"><h2>Size &amp; crop</h2>
         <button type="button" class="reset" id="reset-size" title="Reset Size &amp; crop to defaults">↺ Reset</button></div>
-      <div class="row"><label for="preset">Size</label>
-        <select id="preset" title="The longer side of the GIF, in pixels. The shorter side follows the crop's shape.">
-          <option value="">Custom</option>
-          <option value="0">Original</option>
-          <option value="1080">1080 px</option>
-          <option value="720">720 px</option>
-          <option value="640">640 px</option>
-          <option value="480" selected>480 px</option>
-          <option value="400">400 px</option>
-          <option value="320">320 px</option>
-          <option value="256">256 px</option>
-          <option value="128">128 px</option>
-        </select></div>
-      <div class="row canvas-row"><label for="out-width">Output</label>
-        <span class="canvas-size">
-          <input type="number" id="out-width" min="16" max="4096" step="1" value="480" aria-label="Width">
-          <span class="muted" aria-hidden="true">×</span>
-          <input type="number" id="out-height" min="16" max="4096" step="1" value="270" aria-label="Height">
-        </span>
-        <span class="muted small">px</span></div>
       <div class="row"><label for="crop-aspect">Crop</label>
         <select id="crop-aspect" title="The shape of the crop box. Free lets you drag any shape.">
           <option value="off" selected>Off (whole frame)</option>
@@ -127,18 +139,33 @@
                  title="Show the whole frame in the GIF view and drag the box to choose what is kept."></div>
         <p id="crop-info" class="muted small">—</p>
       </div>
+      <!-- Only ever smaller than the frames: shrinking needs no new conversion. -->
+      <div class="row"><label for="gif-size">GIF size</label>
+        <select id="gif-size" title="Make the GIF smaller than the converted frames. Same as frames keeps every pixel.">
+          <option value="0" selected>Same as frames</option>
+          <option value="1280">1280 px</option>
+          <option value="960">960 px</option>
+          <option value="720">720 px</option>
+          <option value="640">640 px</option>
+          <option value="480">480 px</option>
+          <option value="400">400 px</option>
+          <option value="320">320 px</option>
+          <option value="256">256 px</option>
+          <option value="128">128 px</option>
+        </select></div>
+      <p id="size-info" class="muted small">—</p>
     </section>
 
-    <section class="group" id="group-colour">
-      <div class="group-head"><h2>Colour &amp; quality</h2>
-        <button type="button" class="reset" id="reset-colour" title="Reset Colour &amp; quality to defaults">↺ Reset</button></div>
-      <div class="row"><label for="colours">GIF colours</label>
-        <input type="range" id="colours" min="2" max="256" step="1" value="256"
-               title="How many colours the GIF's one shared palette holds. Fewer makes a smaller file and a more posterised look.">
-        <output for="colours" id="colours-out">256</output></div>
+    <section class="group" id="group-color">
+      <div class="group-head"><h2>Color &amp; quality</h2>
+        <button type="button" class="reset" id="reset-color" title="Reset Color &amp; quality to defaults">↺ Reset</button></div>
+      <div class="row"><label for="colors">GIF colors</label>
+        <input type="range" id="colors" min="2" max="256" step="1" value="256"
+               title="How many colors the GIF's one shared palette holds. Fewer makes a smaller file and a more posterised look.">
+        <output for="colors" id="colors-out">256</output></div>
       <div class="row"><label for="dither">Dither GIF</label>
         <input type="checkbox" id="dither" checked
-               title="Use noise to smooth colour transitions. Off gives flatter colour and usually a smaller file."></div>
+               title="Use noise to smooth color transitions. Off gives flatter color and usually a smaller file."></div>
       <div class="row"><label for="webp-quality">WebP quality</label>
         <input type="range" id="webp-quality" min="1" max="100" step="1" value="85"
                title="Lossy WebP quality. Higher looks better and makes a bigger file.">
@@ -206,7 +233,6 @@
       <div class="save-grid">
         <button class="save" data-format="gif" disabled>Save GIF</button>
         <button class="save" data-format="webp" disabled>Save WebP</button>
-        <button class="save" data-format="apng" disabled>Save APNG</button>
         <button class="save" data-format="zip" disabled>Save frames (ZIP)</button>
       </div>
       <div class="row actions save-cancel-row" hidden>
@@ -229,7 +255,7 @@
 
     <section id="player" aria-label="Video player">
       <div class="stage" id="video-stage">
-        <video id="video" playsinline preload="auto" hidden></video>
+        <video id="video" playsinline preload="auto" muted hidden></video>
         <div class="dropzone" id="dropzone">
           <div class="drop-inner">
             <strong>Drop a video here</strong>
@@ -253,31 +279,34 @@
           <div class="scrub-mark out" id="scrub-out" hidden></div>
           <div class="scrub-head" id="scrub-head"></div>
         </div>
+        <!--
+          Timecode at the left, the player buttons centred between Start and
+          End, sound at the right. In a narrow player the buttons take the
+          top line and the timecode is centred under them; see style.css.
+        -->
         <div class="transport-row">
-          <div class="transport-buttons">
-            <button type="button" class="icon" id="jump-in" disabled title="Go to the start mark (Home)">⏮</button>
-            <button type="button" class="icon" id="step-back" disabled title="Back one frame (←). Shift: one second.">◀︎❙</button>
-            <button type="button" class="icon play" id="play" disabled title="Play / pause (Space)">▶︎</button>
-            <button type="button" class="icon" id="step-fwd" disabled title="Forward one frame (→). Shift: one second.">❙▶︎</button>
-            <button type="button" class="icon" id="jump-out" disabled title="Go to the end mark (End)">⏭</button>
-          </div>
           <div class="timecode-box">
             <output id="timecode" title="Hours : minutes : seconds : frame within the second">00:00:00:00</output>
             <span id="frame-number" class="muted small"></span>
           </div>
-          <div class="transport-buttons">
-            <button type="button" id="mark-in" disabled title="Mark this frame as the start of the GIF (I)">⟦ Start</button>
-            <button type="button" id="mark-out" disabled title="Mark this frame as the end of the GIF (O)">End ⟧</button>
+          <div class="transport-center">
+            <button type="button" class="btn-start" id="mark-in" disabled title="Mark this frame as the start of the GIF (I)">Start</button>
+            <div class="transport-buttons">
+              <button type="button" class="icon" id="jump-in" disabled title="Go to the start mark (Home)">⏮</button>
+              <button type="button" class="icon" id="step-back" disabled title="Back one frame (←). Shift: one second.">◀︎❙</button>
+              <button type="button" class="icon play" id="play" disabled title="Play / pause (Space)">▶︎</button>
+              <button type="button" class="icon" id="step-fwd" disabled title="Forward one frame (→). Shift: one second.">❙▶︎</button>
+              <button type="button" class="icon" id="jump-out" disabled title="Go to the end mark (End)">⏭</button>
+            </div>
+            <button type="button" class="btn-end" id="mark-out" disabled title="Mark this frame as the end of the GIF (O)">End</button>
           </div>
           <div class="transport-extra">
-            <select id="rate" title="Playback speed of the video (not the GIF)" disabled>
-              <option value="0.25">0.25×</option>
-              <option value="0.5">0.5×</option>
-              <option value="1" selected>1×</option>
-              <option value="2">2×</option>
-            </select>
-            <button type="button" class="icon" id="mute" disabled title="Sound on / off (M)">🔊</button>
+            <button type="button" class="icon" id="mute" disabled title="Sound on / off (M)">🔇</button>
           </div>
+        </div>
+        <!-- The Clip section's Convert to Frames again, under the buttons that set the marks. -->
+        <div class="transport-convert">
+          <button type="button" class="primary convert-btn" id="convert-here" disabled>Convert to Frames</button>
         </div>
       </div>
     </section>
@@ -295,22 +324,39 @@
         </div>
         <p class="placeholder muted" id="gif-placeholder">The GIF appears here after <strong>Convert to Frames</strong>.</p>
       </div>
-      <div class="view-foot">
-        <div class="view-toggles">
-          <label><input type="checkbox" id="preview" disabled
-                 title="Plays the GIF frame by frame at its real timing, including GIF's 10 ms grid. Preview only."> Preview</label>
-          <output id="preview-fps"></output>
-          <label><input type="checkbox" id="show-border"
-                 title="Outlines the exact edge of the GIF. Preview only."> Image border</label>
+      <!--
+        The same bar as the video's, for the frames: Start and End make the
+        selected frame the GIF's first or last, the arrows step through the
+        frames, and play runs the preview at the GIF's real timing.
+      -->
+      <div class="transport" id="gif-transport">
+        <div class="transport-row">
+          <div class="timecode-box">
+            <output id="gif-frame-number" class="frame-badge" title="The video frame shown">frame —</output>
+          </div>
+          <div class="transport-center">
+            <button type="button" class="btn-start" id="gif-set-start" disabled title="Make the selected frame the GIF's first frame (S)">Start</button>
+            <div class="transport-buttons">
+              <button type="button" class="icon" id="gif-jump-start" disabled title="Go to the GIF's first frame">⏮</button>
+              <button type="button" class="icon" id="gif-step-back" disabled title="Previous frame">◀︎❙</button>
+              <button type="button" class="icon play" id="gif-play" disabled title="Play / pause the GIF at its real timing (P)">▶︎</button>
+              <button type="button" class="icon" id="gif-step-fwd" disabled title="Next frame">❙▶︎</button>
+              <button type="button" class="icon" id="gif-jump-end" disabled title="Go to the GIF's last frame">⏭</button>
+            </div>
+            <button type="button" class="btn-end" id="gif-set-end" disabled title="Make the selected frame the GIF's last frame (E)">End</button>
+          </div>
+          <div class="transport-extra">
+            <output id="preview-fps"></output>
+            <span id="view-size" class="muted"></span>
+            <label class="actual-pixels"><input type="checkbox" id="actual-pixels"
+                   title="Show the GIF at its true size, one GIF pixel to one screen pixel, instead of fitted to the view."> Actual pixels</label>
+          </div>
         </div>
-        <span id="view-size" class="muted"></span>
       </div>
     </section>
 
     <section id="filmstrip" aria-label="Frames">
       <div class="strip-head">
-        <button type="button" id="strip-set-start" disabled title="Make the selected frame the GIF's first frame (S)">Set start</button>
-        <button type="button" id="strip-set-end" disabled title="Make the selected frame the GIF's last frame (E)">Set end</button>
         <span id="strip-info" class="muted small">No frames yet.</span>
         <span class="strip-legend muted small">
           <span class="key k-start"></span>start <span class="key k-end"></span>end

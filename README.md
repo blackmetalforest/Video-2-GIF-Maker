@@ -1,7 +1,8 @@
 # Video 2 GIF Maker
 
 Cut a clip out of a video, frame by frame, and save it as a **GIF**, an
-**animated WebP**, an **APNG** or a **ZIP of PNG frames**.
+**animated WebP** or a **ZIP of PNG frames** — from a few frames to hours of
+video.
 
 Everything runs in your browser. Videos are never uploaded — it is a static web
 page with no server behind it.
@@ -10,23 +11,35 @@ page with no server behind it.
 
 1. **Choose a video** — click the file field at the top left, or drop a file
    anywhere on the page.
-2. **Scrub to where the GIF should start** and press **⟦ Start** (or `I`). The
+2. **Scrub to where the GIF should start** and press **Start** (or `I`). The
    timecode under the video is `hours:minutes:seconds:frame`, and it names the
    exact frame on screen — step with the arrow keys to land on the one you want.
-3. **Scrub to the end** and press **End ⟧** (or `O`).
-4. **Convert to Frames.** The marked frames, plus three either side in case a
-   mark is a frame off, appear as thumbnails along the bottom.
-5. **Click a thumbnail, then Set start** (or `S`) — and the same for **Set
-   end** (`E`). The video's marks are already selected.
-6. **Adjust the settings** on the left: Frame skip, size and crop, colours,
-   captions. Skipped frames are greyed in the timeline.
-7. **Tick Preview** to watch the GIF play at its real timing.
-8. **Save** as GIF, WebP, APNG or a ZIP of frames.
+3. **Scrub to the end** and press **End** (or `O`).
+4. **Choose how to convert, then Convert to Frames.** Three choices in the Clip
+   section decide what is kept:
+   - **Frame size** — the video's own by default, or smaller.
+   - **Convert skip** — convert only every 2nd, 3rd… frame. Each one kept
+     stands for the frames skipped after it, so the timing is unchanged. This
+     is how hours of video become a GIF.
+   - **Quality** — converted frames are stored as compressed WebP pictures;
+     lower quality stores more of them in the same memory.
+
+   The Clip section estimates the memory this takes, and asks first —
+   suggesting smaller sizes — when it is more than a browser tab can
+   comfortably hold. The marked frames, plus three either side in case a mark
+   is a frame off, appear as thumbnails along the bottom.
+5. **Pick the GIF's first and last frame.** Click a thumbnail (or step with the
+   arrows under the GIF) and press **Start** (or `S`) — and the same for
+   **End** (`E`). The video's marks are already selected.
+6. **Adjust the settings** on the left: Frame skip, crop, GIF size (smaller
+   than the frames, without converting again), colors, captions. Skipped frames are greyed in the timeline.
+7. **Press play under the GIF** to watch it at its real timing.
+8. **Save** as GIF, WebP or a ZIP of frames.
 
 Frame skip keeps the GIF at the video's speed: with a skip of 1, every other
 frame is kept and each is shown twice as long, so the clip lasts exactly as
-long as it did in the video. **GIF speed** (under Frames → Advanced) plays it
-faster or slower.
+long as it did in the video. **GIF speed** plays it faster or slower: the
+slider runs to 2000%, and double-clicking its number lets you type any speed.
 
 ## Which videos work
 
@@ -58,16 +71,34 @@ Every frame's real presentation time is read from the file
 - **Convert to Frames** and **Save** decode exactly the frames you marked,
   not whichever a seek happened to land near.
 
-The preview works from a scaled-down copy of each frame. Saving goes back to
-the video and decodes every frame again at full size, so the preview's size
-never limits the output.
+## Long videos
+
+The app is built to take hours of video:
+
+- **Converted frames are stored compressed** — each a WebP still in the
+  browser's blob store, which can spill to disk — and decoded only when
+  needed, through a small cache. A 320 × 180 frame takes about 7 KB, so a
+  hundred thousand of them fit in under a gigabyte.
+- **Decoding runs straight through the clip** rather than seeking frame by
+  frame, which over hours of video would restart the decoder at every
+  keyframe.
+- **The timeline is virtual:** only the thumbnails on screen exist, so a
+  quarter of a million frames costs no more to scroll than a hundred.
+- **Saving streams:** GIF, WebP and ZIP files are written in pieces, never as
+  one huge buffer, and the work yields to the page without timers, which
+  Chrome slows to a crawl in a tab that is not on screen.
+
+A two-hour 1080p video at 30 fps, converted at 320 × 180 with a Convert skip
+of 1 (15 fps), is 114,097 frames and about 0.8 GB stored. Every frame still
+has to be decoded, so converting it takes roughly as long as the decoder
+needs for 228,193 frames of 1080p — about 25 minutes on a typical machine.
 
 ## Timing
 
 GIF stores delays in hundredths of a second, so 30 fps (33.3 ms a frame)
 cannot be stored exactly. Delays are rounded with the error carried forward —
 30, 30, 40, 30, 30, 40 ms… — so a 10 s clip lasts exactly 10 s rather than
-drifting to 9. WebP and APNG store milliseconds.
+drifting to 9. WebP stores milliseconds.
 
 Browsers replace any delay of 10 ms or less with 100 ms, so nothing can play
 faster than 50 fps. A 60 fps clip is held at 20 ms a frame and plays slower;
@@ -95,6 +126,17 @@ workflow cannot switch Pages on by itself.
 The site is at <https://blackmetalforest.github.io/Video-2-GIF-Maker/>.
 
 ## Testing
+
+### Opening a video by address
+
+`?src=` opens a video by address instead of from a file: for example
+<http://localhost:8000/?src=/test-videos/long.mp4>. It is read in pieces with
+range requests (which `serve.py` supports), so a video of many gigabytes is
+never held whole — the way to test long videos, since a test cannot drive the
+browser's file picker. Only addresses on the same site work, and ffmpeg
+conversion needs a real file.
+
+### Unit tests
 
 ```bash
 node tests/run.mjs

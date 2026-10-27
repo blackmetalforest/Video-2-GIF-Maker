@@ -156,7 +156,6 @@ html, body {
 }
 #video { width: 100%; height: 100%; object-fit: contain; }
 #video[hidden], #gif-canvas[hidden] { display: none; }
-#gif-canvas.show-border { box-shadow: 0 0 0 1px #000, 0 0 0 2px rgba(255, 255, 255, 0.5); }
 /* Pixel art and tiny GIFs blown up in the view should stay crisp. */
 #gif-canvas.pixelated { image-rendering: pixelated; }
 
@@ -198,7 +197,8 @@ html, body {
 
 /* ----------------------------------------------------------- transport */
 
-.transport { display: grid; gap: 6px; }
+/* Nothing in the transport is text to select; selecting it broke dragging. */
+.transport { display: grid; gap: 6px; user-select: none; -webkit-user-select: none; }
 
 /*
  * The scrub bar: a track, the marked clip over it in the start/end colours,
@@ -249,20 +249,65 @@ html, body {
 }
 .scrub:focus-visible { outline: 2px solid var(--accent); }
 
+/*
+ * Three columns: the timecode left, the player buttons dead centre, sound
+ * right. The outer two share what is left equally, which is what keeps the
+ * middle centred however wide the timecode is.
+ */
+#player, #gif-view { container-type: inline-size; }
 .transport-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
   align-items: center;
-  justify-content: space-between;
-  flex-wrap: wrap;
-  gap: 8px 14px;
+  gap: 8px 12px;
 }
-.transport-buttons, .transport-extra { display: flex; align-items: center; gap: 6px; }
+.timecode-box { justify-self: start; }
+.transport-extra { justify-self: end; display: flex; align-items: center; gap: 6px; }
+/* Start and End sit a little further out than the buttons are apart. */
+.transport-center { display: flex; align-items: center; gap: 14px; }
+.transport-buttons { display: flex; align-items: center; gap: 6px; }
 .transport button { min-height: 32px; padding: 4px 10px; }
 .transport button.icon { min-width: 40px; font-size: 15px; line-height: 1; }
 .transport button.play { min-width: 52px; }
-#mark-in { background: var(--start); color: #10240f; }
-#mark-out { background: var(--end); color: #fff; }
-#rate { width: auto; padding: 4px 6px; }
+/* Every Start and End button, in the video's bar and the GIF's. */
+.btn-start { background: var(--start); color: #10240f; }
+.btn-end { background: var(--end); color: #fff; }
+
+/* Convert to Frames under the video: the Clip section's orange. */
+.transport-convert { display: flex; justify-content: center; }
+.convert-btn { --accent: #f07a1a; --on-accent: #232326; min-width: 200px; }
+
+/* The GIF bar's reading, in the timecode's frame but smaller. */
+.frame-badge {
+  font: 17px/1 'Oswald', Impact, sans-serif;
+  letter-spacing: 0.05em;
+  font-variant-numeric: tabular-nums;
+  background: #111113;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 10px 5px;
+  color: #fff;
+  white-space: nowrap;
+}
+
+/*
+ * A narrow player — a phone, or a small window — has no room for all three
+ * side by side: the buttons take the top line and the timecode is centred
+ * under them, with sound beside it on the right.
+ */
+@container (max-width: 760px) {
+  .transport-row { grid-template-areas: "center center center" ". time extra"; }
+  .transport-center { grid-area: center; justify-self: center; }
+  .timecode-box { grid-area: time; justify-self: center; }
+  .transport-extra { grid-area: extra; }
+}
+@container (max-width: 420px) {
+  .transport-center { gap: 10px; }
+  .transport-buttons { gap: 4px; }
+  .transport button { padding: 4px 8px; }
+  .transport button.icon { min-width: 34px; font-size: 14px; }
+  .transport button.play { min-width: 42px; }
+}
 
 /*
  * The timecode: big, fixed-width digits, so it can be read at a glance and
@@ -283,24 +328,17 @@ html, body {
 
 /* ---------------------------------------------------------- GIF view */
 
-.view-foot {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px 18px;
-  flex-wrap: wrap;
-}
-.view-toggles { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
-.view-foot label {
+#preview-fps, #view-size { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.actual-pixels {
   display: flex;
   align-items: center;
   gap: 6px;
   color: var(--muted);
-  cursor: pointer;
+  font-size: 13px;
   white-space: nowrap;
+  cursor: pointer;
 }
-.view-foot input[type="checkbox"] { width: 16px; height: 16px; margin: 0; }
-#preview-fps, #view-size { color: var(--muted); font-variant-numeric: tabular-nums; }
+.actual-pixels input[type="checkbox"] { width: 16px; height: 16px; }
 #preview-fps:empty { display: none; }
 
 /*
@@ -351,8 +389,6 @@ html, body {
 #filmstrip { display: grid; gap: 6px; min-width: 0; }
 .strip-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
 .strip-head button { min-height: 30px; padding: 4px 12px; }
-#strip-set-start { background: var(--start); color: #10240f; }
-#strip-set-end { background: var(--end); color: #fff; }
 #strip-info { font-variant-numeric: tabular-nums; }
 .strip-legend { margin-left: auto; display: flex; align-items: center; gap: 4px 6px; flex-wrap: wrap; }
 .strip-legend .key { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-left: 6px; }
@@ -362,23 +398,27 @@ html, body {
 .k-out { background: #444; opacity: 0.6; }
 
 .strip {
-  position: relative;       /* the thumbnails' offsetParent, for centring */
-  display: flex;
-  gap: 4px;
+  position: relative;
   overflow-x: auto;
   overflow-y: hidden;
   padding: 6px 4px 10px;
-  min-height: 106px;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
   scrollbar-color: var(--line) var(--panel);
   outline-offset: -2px;
 }
+/*
+ * The full width of every thumbnail, but only the ones in view are in it
+ * (src/filmstrip.js places each at its own offset).
+ */
+.strip-track { position: relative; height: 92px; }
 .strip:focus-visible { outline: 2px solid var(--accent); }
 
 .thumb {
-  position: relative;
+  position: absolute;
+  top: 0;
+  left: 0;
   flex: none;
   display: grid;
   gap: 2px;
@@ -647,7 +687,28 @@ button.link {
 }
 button.link:active:not(:disabled) { transform: none; }
 
-.save-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 4px; }
+/*
+ * Frame size, in the Clip section: set off by a rule above and below, since it
+ * is the one choice that has to be made before converting.
+ */
+.frame-size {
+  margin: 10px 0;
+  padding: 10px 0 8px;
+  border-top: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+}
+#frame-size-custom-row[hidden] { display: none; }
+#frame-size-custom { width: 96px; justify-self: start; }
+
+/* The memory dialog's choices: one per line, the suggested size first. */
+.memory-card { max-width: 480px; }
+.memory-card p { margin: 0 0 10px; line-height: 1.5; }
+.memory-choices { display: grid; gap: 8px; margin-top: 14px; }
+.memory-choices button { text-align: left; }
+.memory-choices .dim { opacity: 0.75; font-weight: 400; }
+.memory-choices button.primary { --accent: #f07a1a; --on-accent: #232326; }
+
+.save-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 4px; }
 .save-cancel-row { margin-top: 8px; }
 .save-cancel-row[hidden] { display: none; }
 

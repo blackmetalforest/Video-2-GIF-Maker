@@ -6,7 +6,7 @@
  * loss at all.
  */
 
-import { zipSync } from '../../vendor/fflate.module.js';
+import { Zip, ZipPassThrough, ZipDeflate } from '../../vendor/fflate.module.js';
 
 /** Zero-pad so frames sort correctly in a file browser. */
 export function frameName(index, total, ext = 'png') {
@@ -15,18 +15,50 @@ export function frameName(index, total, ext = 'png') {
 }
 
 /**
- * Bundle encoded PNGs into a ZIP, in a folder named after the clip.
- * Stored uncompressed: PNG is already deflated, so re-compressing costs time
- * and saves essentially nothing.
+ * A ZIP written as it goes: each file added is packed at once and its bytes
+ * handed to a Blob in pieces, so a ZIP of a hundred thousand frames never
+ * exists as one buffer. PNG is already deflated, so frames are stored as they
+ * are; anything else (the timing file) is compressed.
  *
- * @param {Uint8Array[]} pngs
- * @param {{name?: string, extra?: Record<string, Uint8Array>}} opts
+ * @param {string} folder  the folder everything goes in
  */
-export function encodeZip(pngs, { name = 'clip', extra = {} } = {}) {
-  const entries = {};
-  pngs.forEach((bytes, i) => {
-    entries[`${name}/${frameName(i, pngs.length)}`] = [bytes, { level: 0 }];
+export function zipWriter(folder) {
+  const pieces = [];
+  let pending = [];
+  let pendingBytes = 0;
+  let failed = null;
+  const zip = new Zip((err, data) => {
+    if (err) { failed = err; return; }
+    pending.push(data);
+    pendingBytes += data.length;
+    if (pendingBytes >= 8 * 1024 * 1024) flush();
   });
-  for (const [file, bytes] of Object.entries(extra)) entries[`${name}/${file}`] = [bytes, { level: 6 }];
-  return new Blob([zipSync(entries)], { type: 'application/zip' });
+  const flush = () => {
+    if (pending.length) pieces.push(new Blob(pending));
+    pending = [];
+    pendingBytes = 0;
+  };
+  return {
+    add(name, bytes, { compress = false } = {}) {
+      const entry = compress ? new ZipDeflate(`${folder}/${name}`, { level: 6 })
+        : new ZipPassThrough(`${folder}/${name}`);
+      zip.add(entry);
+      entry.push(bytes, true);
+      if (failed) throw failed;
+    },
+    finish() {
+      zip.end();
+      if (failed) throw failed;
+      flush();
+      return new Blob(pieces, { type: 'application/zip' });
+    },
+  };
+}
+
+/** All at once, for a handful of frames (and the tests). */
+export function encodeZip(pngs, { name = 'clip', extra = {} } = {}) {
+  const writer = zipWriter(name);
+  pngs.forEach((bytes, i) => writer.add(frameName(i, pngs.length), bytes));
+  for (const [file, bytes] of Object.entries(extra)) writer.add(file, bytes, { compress: true });
+  return writer.finish();
 }
