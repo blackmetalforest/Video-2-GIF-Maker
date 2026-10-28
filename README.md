@@ -31,15 +31,24 @@ page with no server behind it.
 5. **Pick the GIF's first and last frame.** Click a thumbnail (or step with the
    arrows under the GIF) and press **Start** (or `S`) — and the same for
    **End** (`E`). The video's marks are already selected.
-6. **Adjust the settings** on the left: Frame skip, crop, GIF size (smaller
+6. **Adjust the settings** on the left: Extra Frame Skip, crop, GIF size (smaller
    than the frames, without converting again), colors, captions. Skipped frames are greyed in the timeline.
 7. **Press play under the GIF** to watch it at its real timing.
-8. **Save** as GIF, WebP or a ZIP of frames.
+8. **Make** a GIF, WebP or ZIP of frames. The finished file replaces the preview
+   — click it, or **Download** at the foot of the Output section, to save it.
+   Nothing downloads by itself, so a long render is never lost to a save
+   window: the file waits until it is downloaded, discarded, or replaced.
+   **Back to editing** returns to the preview and keeps the file; if you then
+   change a setting, Output says the file was made with earlier settings.
 
-Frame skip keeps the GIF at the video's speed: with a skip of 1, every other
+**Extra Frame Skip** thins the converted frames further, without converting
+again, and keeps the GIF at the video's speed: with a skip of 1, every other
 frame is kept and each is shown twice as long, so the clip lasts exactly as
-long as it did in the video. **GIF speed** plays it faster or slower: the
-slider runs to 2000%, and double-clicking its number lets you type any speed.
+long as it did in the video. **GIF speed** plays it faster or slower, against
+the original video: 100% is real time whatever is skipped. The slider runs
+from 0.1% to 100,000% in round steps, and double-clicking its number lets you
+type any speed. No GIF can play faster than 50 fps, so Extra Frame Skip never
+goes below what keeps it there — it rises by itself as the speed goes up.
 
 ## Which videos work
 
@@ -102,7 +111,7 @@ drifting to 9. WebP stores milliseconds.
 
 Browsers replace any delay of 10 ms or less with 100 ms, so nothing can play
 faster than 50 fps. A 60 fps clip is held at 20 ms a frame and plays slower;
-the Frames section says so, and a Frame skip of 1 fixes it.
+the Frames section says so, and an Extra Frame Skip of 1 fixes it.
 
 ## Running it locally
 

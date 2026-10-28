@@ -25,7 +25,7 @@
          and CHANGELOG.md carry the same number, and the tests check all three
          agree. -->
     <p id="app-tagline"><span>Videos never leave your computer</span>
-       <span id="app-version">V0.2.0</span></p>
+       <span id="app-version">V0.3.0</span></p>
 
     <section class="group" id="group-video">
       <h2>Video</h2>
@@ -43,10 +43,13 @@
       <p id="video-info" class="muted small">MP4 · WebM · MOV · MKV — H.264, H.265, VP8, VP9, AV1. Other files are converted first.</p>
       <div id="fallback-row" hidden>
         <p id="fallback-note" class="small"></p>
-        <div class="row actions">
-          <button id="fallback-go" class="primary">Convert with ffmpeg</button>
-          <button id="fallback-cancel" disabled>Cancel</button>
-        </div>
+        <button id="fallback-go" class="primary">Convert with ffmpeg</button>
+      </div>
+      <!-- Reading, indexing and ffmpeg conversion: see Task in main.js. -->
+      <div class="task" id="video-task" hidden>
+        <div class="task-bar"><div class="task-fill"></div></div>
+        <div class="task-row"><span class="task-text"></span>
+          <button type="button" class="link task-cancel">Cancel</button></div>
       </div>
     </section>
 
@@ -75,7 +78,7 @@
           <span class="muted small">px</span></div>
         <!--
           Skipping frames here means they are never converted at all: the way
-          to make a GIF of hours of video. Frame skip in the Frames section
+          to make a GIF of hours of video. Extra Frame Skip in the Frames section
           thins the converted frames further, without converting again.
         -->
         <div class="row"><label for="convert-skip">Convert skip</label>
@@ -93,25 +96,27 @@
           </select></div>
         <p id="memory-info" class="muted small">—</p>
       </div>
-      <div class="row actions">
-        <button id="convert" class="primary" disabled>Convert to Frames</button>
-        <button id="convert-cancel" disabled>Cancel</button>
-      </div>
-      <div class="progress-wrap" id="convert-progress-wrap" hidden><div class="progress" id="convert-progress"></div></div>
+      <button id="convert" class="primary convert-wide" disabled>Convert to Frames</button>
       <p id="convert-info" class="muted small">Takes 3 extra frames either side of the marks, so nothing is lost to a frame’s slip.</p>
+      <!-- Converting frames. -->
+      <div class="task" id="clip-task" hidden>
+        <div class="task-bar"><div class="task-fill"></div></div>
+        <div class="task-row"><span class="task-text"></span>
+          <button type="button" class="link task-cancel">Cancel</button></div>
+      </div>
     </section>
 
     <section class="group" id="group-frames">
       <div class="group-head"><h2>Frames</h2>
         <button type="button" class="reset" id="reset-frames" title="Reset Frames to defaults">↺ Reset</button></div>
-      <div class="row"><label for="skip">Frame skip</label>
+      <div class="row"><label for="skip">Extra Frame Skip</label>
         <input type="range" id="skip" min="0" max="15" step="1" value="0"
-               title="Leave out this many frames after each one kept. Each kept frame is held longer, so the GIF still runs at the video's speed.">
+               title="Leave out this many frames after each one kept. Each kept frame is held longer, so the GIF still runs at the video's speed. It never goes below what keeps the GIF at 50 fps or less.">
         <output for="skip" id="skip-out">0</output></div>
       <p id="skip-note" class="muted small">Every frame is kept.</p>
       <div class="row"><label for="speed">GIF speed</label>
-        <input type="range" id="speed" min="10" max="2000" step="5" value="100"
-               title="Play the GIF faster or slower than the video. 100% matches the video. Double-click the number to type any speed.">
+        <input type="range" id="speed" min="0" max="34" step="1" value="12"
+               title="How fast the GIF plays, against the original video: 100% is real time, whatever is skipped. Double-click the number to type any speed.">
         <output for="speed" id="speed-out">100%</output></div>
       <div class="loop-row">
         <p id="frames-info" class="muted small">—</p>
@@ -154,34 +159,6 @@
           <option value="128">128 px</option>
         </select></div>
       <p id="size-info" class="muted small">—</p>
-    </section>
-
-    <section class="group" id="group-color">
-      <div class="group-head"><h2>Color &amp; quality</h2>
-        <button type="button" class="reset" id="reset-color" title="Reset Color &amp; quality to defaults">↺ Reset</button></div>
-      <div class="row"><label for="colors">GIF colors</label>
-        <input type="range" id="colors" min="2" max="256" step="1" value="256"
-               title="How many colors the GIF's one shared palette holds. Fewer makes a smaller file and a more posterised look.">
-        <output for="colors" id="colors-out">256</output></div>
-      <div class="row"><label for="dither">Dither GIF</label>
-        <input type="checkbox" id="dither" checked
-               title="Use noise to smooth color transitions. Off gives flatter color and usually a smaller file."></div>
-      <div class="row"><label for="webp-quality">WebP quality</label>
-        <input type="range" id="webp-quality" min="1" max="100" step="1" value="85"
-               title="Lossy WebP quality. Higher looks better and makes a bigger file.">
-        <output for="webp-quality" id="webp-quality-out">85</output></div>
-      <div class="row"><label for="webp-lossless">Lossless WebP</label>
-        <input type="checkbox" id="webp-lossless"
-               title="Every pixel exactly as decoded, with no compression loss. Files get much bigger."></div>
-      <div class="row"><label for="size-limit">Size limit</label>
-        <select id="size-limit"
-                title="When the saved file would be bigger than this, it is made again at a smaller size until it fits.">
-          <option value="0" selected>None</option>
-          <option value="8">8 MB</option>
-          <option value="10">10 MB (Discord)</option>
-          <option value="25">25 MB</option>
-          <option value="50">50 MB</option>
-        </select></div>
     </section>
 
     <section class="group" id="group-text">
@@ -228,19 +205,77 @@
     </section>
 
     <section class="group" id="group-output">
-      <h2>Output</h2>
-      <p id="output-info" class="muted small">Convert to Frames first.</p>
+      <div class="group-head"><h2>Output</h2>
+        <button type="button" class="reset" id="reset-color" title="Reset the Output options to defaults">↺ Reset</button></div>
+      <div class="row"><label for="colors">GIF colors</label>
+        <input type="range" id="colors" min="2" max="256" step="1" value="256"
+               title="How many colors the GIF's one shared palette holds. Fewer makes a smaller file and a more posterised look.">
+        <output for="colors" id="colors-out">256</output></div>
+      <div class="row"><label for="dither">Dither GIF</label>
+        <input type="checkbox" id="dither" checked
+               title="Use noise to smooth color transitions. Off gives flatter color and usually a smaller file."></div>
+      <!--
+        The numbers are the WebP encoder's quality, 0–100. Medium is 75, the
+        encoder's own default and a sound balance for video; Lossless keeps
+        every pixel and makes by far the biggest file.
+      -->
+      <div class="row"><label for="webp-quality">WebP quality</label>
+        <select id="webp-quality"
+                title="How the animated WebP is compressed. Higher looks better and makes a bigger file.">
+          <option value="custom">Custom</option>
+          <option value="lossless">Lossless</option>
+          <option value="0.9">High</option>
+          <option value="0.75" selected>Medium</option>
+          <option value="0.5">Low</option>
+          <option value="0.05">Comically Low</option>
+        </select></div>
+      <!-- Custom: any quality, 0 to 100. -->
+      <div class="row" id="webp-custom-row" hidden><label for="webp-custom">Quality</label>
+        <input type="range" id="webp-custom" min="0" max="100" step="1" value="75"
+               title="The WebP encoder's quality, 0 to 100. Double-click the number to type one.">
+        <output for="webp-custom" id="webp-custom-out">75</output></div>
+      <!--
+        Size limit: hidden for now, but still wired up — a file over the limit is
+        made again smaller until it fits (see save() in main.js). Remove
+        `hidden` to bring it back.
+      -->
+      <div class="row" id="size-limit-row" hidden><label for="size-limit">Size limit</label>
+        <select id="size-limit"
+                title="When the saved file would be bigger than this, it is made again at a smaller size until it fits.">
+          <option value="0" selected>None</option>
+          <option value="8">8 MB</option>
+          <option value="10">10 MB (Discord)</option>
+          <option value="25">25 MB</option>
+          <option value="50">50 MB</option>
+        </select></div>
+      <p id="output-info" class="muted small output-info">Convert to Frames first.</p>
       <div class="save-grid">
-        <button class="save" data-format="gif" disabled>Save GIF</button>
-        <button class="save" data-format="webp" disabled>Save WebP</button>
-        <button class="save" data-format="zip" disabled>Save frames (ZIP)</button>
+        <button class="save" data-format="gif" disabled>Make GIF</button>
+        <button class="save" data-format="webp" disabled>Make WebP</button>
+        <button class="save" data-format="zip" disabled>Make ZIP</button>
       </div>
-      <div class="row actions save-cancel-row" hidden>
-        <span class="muted small" id="save-status"></span>
-        <button id="save-cancel">Cancel</button>
-      </div>
-      <div class="progress-wrap" id="save-progress-wrap" hidden><div class="progress" id="save-progress"></div></div>
       <p id="save-info" class="muted small"></p>
+      <!-- Making the file. -->
+      <div class="task" id="save-task" hidden>
+        <div class="task-bar"><div class="task-fill"></div></div>
+        <div class="task-row"><span class="task-text"></span>
+          <button type="button" class="link task-cancel">Cancel</button></div>
+      </div>
+      <!--
+        The finished file waits here until it is downloaded or thrown away:
+        making it never downloads by itself, so a save window left open, or
+        closed, never costs the work.
+      -->
+      <div class="download-block">
+        <button type="button" id="download" class="primary download-btn" disabled>Download</button>
+        <div class="download-row">
+          <span id="download-info" class="muted small">Nothing made yet.</span>
+          <span class="download-links">
+            <button type="button" class="link" id="finished-show" hidden>Show</button>
+            <button type="button" class="link" id="finished-discard" hidden>Discard</button>
+          </span>
+        </div>
+      </div>
     </section>
 
     <footer class="muted small">
@@ -264,7 +299,6 @@
             <button id="browse-empty" class="primary">Choose a video…</button>
           </div>
         </div>
-        <div class="busy" id="busy" hidden><div class="spinner"></div><span id="busy-text">Working…</span></div>
       </div>
       <div class="transport" id="transport">
         <!--
@@ -323,6 +357,16 @@
           </div>
         </div>
         <p class="placeholder muted" id="gif-placeholder">The GIF appears here after <strong>Convert to Frames</strong>.</p>
+        <!-- The finished file, shown in place of the preview once it is made. -->
+        <div class="finished" id="finished" hidden>
+          <img id="finished-img" alt="The finished file" title="Click to save it" hidden>
+          <button type="button" class="finished-card" id="finished-card" hidden title="Click to save it"></button>
+        </div>
+        <div class="finished-bar" id="finished-bar" hidden>
+          <span id="finished-label"></span>
+          <button type="button" class="primary" id="finished-download">Download</button>
+          <button type="button" id="finished-back">Back to editing</button>
+        </div>
       </div>
       <!--
         The same bar as the video's, for the frames: Start and End make the

@@ -43,7 +43,7 @@ export class NotDecodable extends Error {
  * @param {Blob|string} file  a File or Blob, or the address of one — read in
  *        pieces with range requests, so even a video of many gigabytes is never
  *        held whole
- * @param {{onProgress?: (fraction:number) => void, signal?: AbortSignal}} opts
+ * @param {{onProgress?: (fraction:number, frames:number) => void, signal?: AbortSignal}} opts
  */
 export async function openVideo(file, { onProgress = null, signal = null } = {}) {
   const from = typeof file === 'string'
@@ -106,7 +106,7 @@ async function indexFrames(track, { onProgress, signal }) {
     pairs.push(packet.timestamp, packet.duration);
     if (onProgress && end > 0 && pairs.length - lastReport > 2000) {
       lastReport = pairs.length;
-      onProgress(Math.min(1, packet.timestamp / end));
+      onProgress(Math.min(1, packet.timestamp / end), pairs.length / 2);   // frames so far
     }
   }
 

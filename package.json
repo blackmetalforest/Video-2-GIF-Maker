@@ -1,6 +1,6 @@
 {
   "name": "video-2-gif-maker",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Video 2 GIF Maker - cut a clip out of a video frame by frame and save it as a GIF, WebP, APNG or frames. Static site, no build step.",

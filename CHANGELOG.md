@@ -3,6 +3,31 @@
 The version shown in the app (under the title), `package.json` and the newest
 entry here always agree; `node tests/run.mjs` checks it.
 
+## 0.3.0
+
+Finished files that wait for you, and a reworked Frames section.
+
+- Making a file no longer downloads it. The buttons are Make GIF, Make WebP
+  and Make ZIP; the finished file replaces the preview (a GIF or WebP plays as
+  the real file) and waits for Download at the foot of the Output section, so
+  a long render is never lost to a closed save window. Back to editing keeps
+  it, Show brings it back, Discard throws it away, and changing a setting
+  marks it as made with earlier settings.
+- Progress bars at the bottom of each section — Video, Clip and Output — in
+  the section's colour, with a line of detail (frames, fps, size, time left)
+  and Cancel. The spinner over the video is gone.
+- GIF speed runs from 0.1% to 100,000% in round steps, against the original
+  video whatever is skipped; any speed can be typed.
+- Extra Frame Skip (renamed from Frame skip) never goes below what keeps the
+  GIF at 50 fps or less, rising by itself as the speed goes up and returning
+  to your own choice when it comes down.
+- Pausing the GIF preview stops on the frame on screen and selects it in the
+  timeline and the video.
+- WebP quality is a menu: Custom (with its own slider), Lossless, High,
+  Medium (the default, 75), Low and Comically Low.
+- The Color & quality options moved into the Output section. Size limit is
+  hidden for now.
+
 ## 0.2.0
 
 Long videos, and a Clip step that decides how frames are converted.
